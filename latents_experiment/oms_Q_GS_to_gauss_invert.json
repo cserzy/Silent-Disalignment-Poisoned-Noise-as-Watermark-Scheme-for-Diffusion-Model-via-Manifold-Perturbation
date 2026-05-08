@@ -1,0 +1,66 @@
+{
+  "mode": "invert_only",
+  "source_pt": "/home/yancy/work/dm_backdoor_latent_space/experiment-1_19/latents_experiment/generate_GS_w_att_oms_gauss.pt",
+  "target_pt": "",
+  "q_pt": "/home/yancy/work/dm_backdoor_latent_space/experiment-1_19/latents_experiment/oms_Q_GS_to_gauss.pt",
+  "q_meta_json": "",
+  "q_seed": 12345,
+  "block_mode": "flat_chunk",
+  "block_size": 64,
+  "blend_alpha": 1.0,
+  "match_target_std": false,
+  "device": "cpu",
+  "dtype": "fp32",
+  "strict_shape": true,
+  "latent_key": "",
+  "latent_shape": [
+    16,
+    4,
+    64,
+    64
+  ],
+  "num_samples": 16,
+  "num_dims": 16384,
+  "apply_device": "cpu",
+  "inverse": true,
+  "norm_stats": {
+    "mean_norm_x": 128.09173583984375,
+    "mean_norm_xq": 115.17601013183594
+  },
+  "blend_stats": null,
+  "inverse_info": {
+    "inverse_mode": "blended_plus_rescale_inverse",
+    "blend_alpha": 0.2,
+    "match_target_std": true,
+    "rescale_factor": 1.3499664891868715,
+    "param_source": {
+      "blend_alpha": "q_pt",
+      "match_target_std": "q_pt.std_match",
+      "rescale_factor": "q_pt.std_match",
+      "std_before_rescale": "q_pt.std_match",
+      "std_target": "q_pt.std_match",
+      "eps": "q_pt.std_match"
+    },
+    "solve_summary": {
+      "num_blocks": 256,
+      "all_blocks_solved": true,
+      "cond_mean": 1.6662209635685044,
+      "cond_max": 1.6666677594185526,
+      "sv_min_min": 0.5999998450279236
+    },
+    "recovered_global_stats_flattened": {
+      "mean": -0.008243908174335957,
+      "std": 0.8997817635536194,
+      "min": -4.164210319519043,
+      "max": 4.234250545501709
+    },
+    "recovered_norm_stats_flattened": {
+      "mean": 115.17601013183594,
+      "std": 0.4531417489051819
+    }
+  },
+  "time_cost_sec": {
+    "total": 0.18445682525634766
+  },
+  "out_pt": "/home/yancy/work/dm_backdoor_latent_space/experiment-1_19/latents_experiment/generate_GS_w_att_oms_gauss_inv.pt"
+}

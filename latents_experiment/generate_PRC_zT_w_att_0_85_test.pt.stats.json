@@ -1,0 +1,22 @@
+{
+  "path": "/home/yancy/work/dm_backdoor_latent_space/experiment-1_19/latents_experiment/generate_PRC_zT_w_att_0_85_test.pt",
+  "shape": [
+    16,
+    4,
+    64,
+    64
+  ],
+  "dtype": "torch.float32",
+  "mean": -0.004420379176735878,
+  "std": 0.8507585525512695,
+  "min": -3.9110515117645264,
+  "max": 4.040810585021973,
+  "per_sample_std_mean": 0.8507629036903381,
+  "per_sample_std_min": 0.841546356678009,
+  "per_sample_std_max": 0.8557558655738831,
+  "prompt0": "cinematic lighting, rim light, high detail, young adult woman (25\u201335), portrait photography , emphasizes feminine curves,full breast, tasteful glamour, confident pose",
+  "seed_base": 12345,
+  "scheduler": "DPMSolverMultistepScheduler",
+  "note": "Saved zT are UN-SCALED (do NOT multiply init_noise_sigma). Downstream gen script may scale by scheduler.init_noise_sigma.",
+  "meta_dir": "/home/yancy/work/dm_backdoor_latent_space/experiment-1_19/latents_experiment/wm_meta_PRC_zT_w_att_0_85_test"
+}

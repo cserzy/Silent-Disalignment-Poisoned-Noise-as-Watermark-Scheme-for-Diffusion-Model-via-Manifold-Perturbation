@@ -1,0 +1,356 @@
+{
+  "zT16[00]": {
+    "name": "zT16[00]",
+    "mode": "zT16",
+    "zT_idx": 0,
+    "image": null,
+    "robustness": {
+      "detected": 1.0,
+      "norm1_no_w": 154.243896484375,
+      "norm1_w": 2581.18017578125,
+      "acc_key": 1.0,
+      "acc_msg": 1.0,
+      "acc_msg_oracle": 1.0
+    },
+    "meta": {
+      "combo_id": 0,
+      "tau": 0.674,
+      "key_channel_idx": 0,
+      "key_length": 16,
+      "msg_length": 256
+    }
+  },
+  "zT16[01]": {
+    "name": "zT16[01]",
+    "mode": "zT16",
+    "zT_idx": 1,
+    "image": null,
+    "robustness": {
+      "detected": 1.0,
+      "norm1_no_w": 103.12893676757812,
+      "norm1_w": 2572.5107421875,
+      "acc_key": 1.0,
+      "acc_msg": 1.0,
+      "acc_msg_oracle": 1.0
+    },
+    "meta": {
+      "combo_id": 1,
+      "tau": 0.674,
+      "key_channel_idx": 0,
+      "key_length": 16,
+      "msg_length": 256
+    }
+  },
+  "zT16[02]": {
+    "name": "zT16[02]",
+    "mode": "zT16",
+    "zT_idx": 2,
+    "image": null,
+    "robustness": {
+      "detected": 1.0,
+      "norm1_no_w": 176.18246459960938,
+      "norm1_w": 2557.25927734375,
+      "acc_key": 1.0,
+      "acc_msg": 1.0,
+      "acc_msg_oracle": 1.0
+    },
+    "meta": {
+      "combo_id": 2,
+      "tau": 0.674,
+      "key_channel_idx": 0,
+      "key_length": 16,
+      "msg_length": 256
+    }
+  },
+  "zT16[03]": {
+    "name": "zT16[03]",
+    "mode": "zT16",
+    "zT_idx": 3,
+    "image": null,
+    "robustness": {
+      "detected": 1.0,
+      "norm1_no_w": 132.129638671875,
+      "norm1_w": 2563.1630859375,
+      "acc_key": 1.0,
+      "acc_msg": 1.0,
+      "acc_msg_oracle": 1.0
+    },
+    "meta": {
+      "combo_id": 3,
+      "tau": 0.674,
+      "key_channel_idx": 0,
+      "key_length": 16,
+      "msg_length": 256
+    }
+  },
+  "zT16[04]": {
+    "name": "zT16[04]",
+    "mode": "zT16",
+    "zT_idx": 4,
+    "image": null,
+    "robustness": {
+      "detected": 1.0,
+      "norm1_no_w": 126.76756286621094,
+      "norm1_w": 2627.9833984375,
+      "acc_key": 1.0,
+      "acc_msg": 1.0,
+      "acc_msg_oracle": 1.0
+    },
+    "meta": {
+      "combo_id": 4,
+      "tau": 0.674,
+      "key_channel_idx": 0,
+      "key_length": 16,
+      "msg_length": 256
+    }
+  },
+  "zT16[05]": {
+    "name": "zT16[05]",
+    "mode": "zT16",
+    "zT_idx": 5,
+    "image": null,
+    "robustness": {
+      "detected": 1.0,
+      "norm1_no_w": 168.80178833007812,
+      "norm1_w": 2606.150390625,
+      "acc_key": 1.0,
+      "acc_msg": 1.0,
+      "acc_msg_oracle": 1.0
+    },
+    "meta": {
+      "combo_id": 5,
+      "tau": 0.674,
+      "key_channel_idx": 0,
+      "key_length": 16,
+      "msg_length": 256
+    }
+  },
+  "zT16[06]": {
+    "name": "zT16[06]",
+    "mode": "zT16",
+    "zT_idx": 6,
+    "image": null,
+    "robustness": {
+      "detected": 1.0,
+      "norm1_no_w": 118.354736328125,
+      "norm1_w": 2633.3349609375,
+      "acc_key": 1.0,
+      "acc_msg": 1.0,
+      "acc_msg_oracle": 1.0
+    },
+    "meta": {
+      "combo_id": 6,
+      "tau": 0.674,
+      "key_channel_idx": 0,
+      "key_length": 16,
+      "msg_length": 256
+    }
+  },
+  "zT16[07]": {
+    "name": "zT16[07]",
+    "mode": "zT16",
+    "zT_idx": 7,
+    "image": null,
+    "robustness": {
+      "detected": 1.0,
+      "norm1_no_w": 152.67843627929688,
+      "norm1_w": 2631.70849609375,
+      "acc_key": 1.0,
+      "acc_msg": 1.0,
+      "acc_msg_oracle": 1.0
+    },
+    "meta": {
+      "combo_id": 7,
+      "tau": 0.674,
+      "key_channel_idx": 0,
+      "key_length": 16,
+      "msg_length": 256
+    }
+  },
+  "zT16[08]": {
+    "name": "zT16[08]",
+    "mode": "zT16",
+    "zT_idx": 8,
+    "image": null,
+    "robustness": {
+      "detected": 1.0,
+      "norm1_no_w": 117.48003387451172,
+      "norm1_w": 2594.10400390625,
+      "acc_key": 1.0,
+      "acc_msg": 1.0,
+      "acc_msg_oracle": 1.0
+    },
+    "meta": {
+      "combo_id": 8,
+      "tau": 0.674,
+      "key_channel_idx": 0,
+      "key_length": 16,
+      "msg_length": 256
+    }
+  },
+  "zT16[09]": {
+    "name": "zT16[09]",
+    "mode": "zT16",
+    "zT_idx": 9,
+    "image": null,
+    "robustness": {
+      "detected": 1.0,
+      "norm1_no_w": 167.30050659179688,
+      "norm1_w": 2587.408203125,
+      "acc_key": 1.0,
+      "acc_msg": 1.0,
+      "acc_msg_oracle": 1.0
+    },
+    "meta": {
+      "combo_id": 9,
+      "tau": 0.674,
+      "key_channel_idx": 0,
+      "key_length": 16,
+      "msg_length": 256
+    }
+  },
+  "zT16[10]": {
+    "name": "zT16[10]",
+    "mode": "zT16",
+    "zT_idx": 10,
+    "image": null,
+    "robustness": {
+      "detected": 1.0,
+      "norm1_no_w": 125.98275756835938,
+      "norm1_w": 2613.57421875,
+      "acc_key": 1.0,
+      "acc_msg": 1.0,
+      "acc_msg_oracle": 1.0
+    },
+    "meta": {
+      "combo_id": 10,
+      "tau": 0.674,
+      "key_channel_idx": 0,
+      "key_length": 16,
+      "msg_length": 256
+    }
+  },
+  "zT16[11]": {
+    "name": "zT16[11]",
+    "mode": "zT16",
+    "zT_idx": 11,
+    "image": null,
+    "robustness": {
+      "detected": 1.0,
+      "norm1_no_w": 91.96835327148438,
+      "norm1_w": 2677.09814453125,
+      "acc_key": 1.0,
+      "acc_msg": 1.0,
+      "acc_msg_oracle": 1.0
+    },
+    "meta": {
+      "combo_id": 11,
+      "tau": 0.674,
+      "key_channel_idx": 0,
+      "key_length": 16,
+      "msg_length": 256
+    }
+  },
+  "zT16[12]": {
+    "name": "zT16[12]",
+    "mode": "zT16",
+    "zT_idx": 12,
+    "image": null,
+    "robustness": {
+      "detected": 1.0,
+      "norm1_no_w": 122.97583770751953,
+      "norm1_w": 2587.94580078125,
+      "acc_key": 1.0,
+      "acc_msg": 1.0,
+      "acc_msg_oracle": 1.0
+    },
+    "meta": {
+      "combo_id": 12,
+      "tau": 0.674,
+      "key_channel_idx": 0,
+      "key_length": 16,
+      "msg_length": 256
+    }
+  },
+  "zT16[13]": {
+    "name": "zT16[13]",
+    "mode": "zT16",
+    "zT_idx": 13,
+    "image": null,
+    "robustness": {
+      "detected": 1.0,
+      "norm1_no_w": 171.75938415527344,
+      "norm1_w": 2634.0859375,
+      "acc_key": 1.0,
+      "acc_msg": 1.0,
+      "acc_msg_oracle": 1.0
+    },
+    "meta": {
+      "combo_id": 13,
+      "tau": 0.674,
+      "key_channel_idx": 0,
+      "key_length": 16,
+      "msg_length": 256
+    }
+  },
+  "zT16[14]": {
+    "name": "zT16[14]",
+    "mode": "zT16",
+    "zT_idx": 14,
+    "image": null,
+    "robustness": {
+      "detected": 1.0,
+      "norm1_no_w": 205.6930389404297,
+      "norm1_w": 2637.80810546875,
+      "acc_key": 1.0,
+      "acc_msg": 1.0,
+      "acc_msg_oracle": 1.0
+    },
+    "meta": {
+      "combo_id": 14,
+      "tau": 0.674,
+      "key_channel_idx": 0,
+      "key_length": 16,
+      "msg_length": 256
+    }
+  },
+  "zT16[15]": {
+    "name": "zT16[15]",
+    "mode": "zT16",
+    "zT_idx": 15,
+    "image": null,
+    "robustness": {
+      "detected": 1.0,
+      "norm1_no_w": 150.77932739257812,
+      "norm1_w": 2595.99853515625,
+      "acc_key": 1.0,
+      "acc_msg": 1.0,
+      "acc_msg_oracle": 1.0
+    },
+    "meta": {
+      "combo_id": 15,
+      "tau": 0.674,
+      "key_channel_idx": 0,
+      "key_length": 16,
+      "msg_length": 256
+    }
+  },
+  "summary_all": {
+    "auc": 1.0,
+    "acc": 1.0,
+    "tpr@fpr<1e-6": 1.0,
+    "det_rate": 1.0,
+    "bit_accuracy": 1.0,
+    "bit_accuracy_oracle": 1.0,
+    "n": 16
+  },
+  "summary_zT16": {
+    "auc": 1.0,
+    "acc": 1.0,
+    "tpr@fpr<1e-6": 1.0,
+    "det_rate": 1.0,
+    "bit_accuracy": 1.0,
+    "bit_accuracy_oracle": 1.0,
+    "n": 16
+  }
+}
