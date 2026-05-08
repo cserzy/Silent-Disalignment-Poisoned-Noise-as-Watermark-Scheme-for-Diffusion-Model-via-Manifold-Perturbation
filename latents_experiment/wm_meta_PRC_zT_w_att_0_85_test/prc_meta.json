@@ -1,9 +1,0 @@
-{
-  "mode": "prc_global",
-  "D": 16384,
-  "prc_message_length_bits": 8,
-  "noise_rate": 0.01,
-  "false_positive_rate": 1e-09,
-  "t": 3,
-  "np_seed": 0
-}

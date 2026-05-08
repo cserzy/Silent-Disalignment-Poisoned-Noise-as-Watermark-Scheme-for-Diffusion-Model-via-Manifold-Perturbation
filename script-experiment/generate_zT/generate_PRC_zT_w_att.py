@@ -135,7 +135,7 @@ class DiffusionSamplerConfig:
 
 
 @dataclass
-class SSCConfig:
+class sspConfig:
     N_cal: int = 12
     guidance_scale: float=7.5,
     d_sens_max: int = 64
@@ -145,7 +145,7 @@ class SSCConfig:
 
 
 @dataclass
-class SPSConfig:
+class ARRConfig:
     T_r: int = 2
     eta: float = 0.05
     normalize_grad: bool = True
@@ -330,10 +330,10 @@ class DiffusionSampler:
         self.scheduler = pipe.scheduler
 
         # -------------------------
-        # DType management (important for SSC/SPS gradients)
+        # DType management (important for ssp/ARR gradients)
         # -------------------------
         # Many diffusers components (e.g., timestep embedding / LoRA layers) are sensitive to mixed Float/Half graphs
-        # when we do autograd on latents. To make SSC/SPS robust, we switch UNet+VAE to fp32 whenever
+        # when we do autograd on latents. To make ssp/ARR robust, we switch UNet+VAE to fp32 whenever
         # latents.requires_grad=True, and switch back to fp16 for normal generation (speed/low-mem).
         self._dtype_fp16 = torch.float16 if self.device.type == "cuda" else torch.float32
         self._dtype_fp32 = torch.float32
@@ -376,7 +376,7 @@ class DiffusionSampler:
     def decode_latents(self, latents: torch.Tensor) -> torch.Tensor:
         """Decode latents to image tensor in [0,1].
 
-        - Keeps gradients when latents.requires_grad=True (SSC/SPS).
+        - Keeps gradients when latents.requires_grad=True (ssp/ARR).
         - Fixes dtype mismatch between latents and VAE conv weights.
         - Mimics diffusers' 'upcast_vae + cast latents to post_quant_conv dtype' behavior.
         """
@@ -434,7 +434,7 @@ class DiffusionSampler:
 
 
     def sample(self, prompt: str, negative_prompt: str, latents: torch.Tensor, cfg: DiffusionSamplerConfig) -> torch.Tensor:
-        # latents: (B,C,H,W) starting noise (may require grad in SSC/SPS)
+        # latents: (B,C,H,W) starting noise (may require grad in ssp/ARR)
         grad_on = bool(getattr(latents, "requires_grad", False))
         # Switch model dtype depending on whether we need gradients on latents
         self._set_model_dtype("fp32" if grad_on else "fp16")
@@ -461,7 +461,7 @@ class DiffusionSampler:
 
 
 # -------------------------
-# Workflow: SSC + EBS + SPS
+# Workflow: ssp + SSM + ARR
 # -------------------------
 
 class AlignPreserveNaW:
@@ -473,11 +473,11 @@ class AlignPreserveNaW:
         # latent dim
         B,C,H,W = latent_shape
         self.D = int(C*H*W)
-        # SSC basis
+        # ssp basis
         self.B_sens: Optional[torch.Tensor] = None
         # PRC (global)
         self.prc: Optional[GlobalPRCWatermark] = None
-        # mixing lambda: zT = lam1 * z_wm + (1-lam1) * z_free
+        # mixing lambda: zT = lam1 * z_wm + (1-lam1) * z_sens
         self.lam1 = 0.6
         self.prc_posterior_boost = True
         self.prc_boost_var = 1.5
@@ -493,22 +493,22 @@ class AlignPreserveNaW:
     def set_prc(self, prc: GlobalPRCWatermark) -> None:
         self.prc = prc
 
-    def run_ssc(self, cal_prompts: List[str], ssc_cfg: SSCConfig) -> Dict[str, torch.Tensor]:
+    def run_ssp(self, cal_prompts: List[str], ssp_cfg: sspConfig) -> Dict[str, torch.Tensor]:
         """Calibrate sensitive subspace B_sens (no B_wm in this variant)."""
         B, C, H, W = self.latent_shape
 
         grads: List[torch.Tensor] = []
-        for i, p in enumerate(cal_prompts[: int(ssc_cfg.N_cal)]):
-            # Per-prompt random init (aligned with TR/T2S SSC style)
+        for i, p in enumerate(cal_prompts[: int(ssp_cfg.N_cal)]):
+            # Per-prompt random init (aligned with TR/T2S ssp style)
             g = torch.Generator(device=self.device.type)
             g.manual_seed(12345 + int(i))
             z0 = torch.randn((1, C, H, W), generator=g, device=self.device, dtype=torch.float32, requires_grad=True)
 
             cfg = DiffusionSamplerConfig(
-                num_steps=int(ssc_cfg.mini_steps),
-                guidance_scale=float(ssc_cfg.guidance_scale),
+                num_steps=int(ssp_cfg.mini_steps),
+                guidance_scale=float(ssp_cfg.guidance_scale),
                 eta=0.0,
-                mini_steps=int(ssc_cfg.mini_steps),
+                mini_steps=int(ssp_cfg.mini_steps),
             )
             img = self.sampler.sample(p, negative_prompt="", latents=z0, cfg=cfg)
             loss = self.surrogate(img, p)
@@ -525,12 +525,12 @@ class AlignPreserveNaW:
         energy = (S ** 2).reshape(-1)
         cum = torch.cumsum(energy, dim=0) / (energy.sum() + 1e-12)
 
-        ratio = float(ssc_cfg.energy_ratio)
+        ratio = float(ssp_cfg.energy_ratio)
         thr = torch.tensor(ratio, device=cum.device, dtype=cum.dtype)
         k = int(torch.searchsorted(cum, thr).item() + 1)
         k = max(1, min(k, int(energy.numel())))
 
-        d_sens = min(int(ssc_cfg.d_sens_max), k)
+        d_sens = min(int(ssp_cfg.d_sens_max), k)
         d_sens = max(1, int(d_sens))
 
         B_sens = Vt[:d_sens].transpose(0, 1).contiguous()  # (D,d_sens)
@@ -547,19 +547,19 @@ class AlignPreserveNaW:
             return torch.zeros_like(X)
         return (X @ B) @ B.transpose(0, 1)
 
-    def ebs_sample(self, batch_size: int, seed: int, latent_chw: Tuple[int,int,int]) -> torch.Tensor:
-        """EBS: build zT by mixing global PRC watermark z_wm and sensitive projection z_free.
+    def SSM_sample(self, batch_size: int, seed: int, latent_chw: Tuple[int,int,int]) -> torch.Tensor:
+        """SSM: build zT by mixing global PRC watermark z_wm and sensitive projection z_sens.
 
         New rule:
           z ~ N(0,I)
-          z_free = Proj_{span(B_sens)}(z)
+          z_sens = Proj_{span(B_sens)}(z)
           z_wm  = PRC-global pseudoGaussian sample (full space)
-          zT = lam1 * z_wm + sqrt(1-lam1*lam1) * z_free
+          zT = lam1 * z_wm + sqrt(1-lam1*lam1) * z_sens
         """
         if self.B_sens is None:
-            raise ValueError('B_sens not initialized. Run SSC first.')
+            raise ValueError('B_sens not initialized. Run ssp first.')
         if self.prc is None:
-            raise ValueError('PRC not initialized. Call set_prc(...) before EBS.')
+            raise ValueError('PRC not initialized. Call set_prc(...) before SSM.')
 
         C, H, W_ = latent_chw
         g = torch.Generator(device='cpu')
@@ -568,15 +568,15 @@ class AlignPreserveNaW:
         z = torch.randn((batch_size, C, H, W_), generator=g, device='cpu', dtype=torch.float32)
         z_flat = flatten_latent(z).to(self.device)
 
-        # z_free: projection onto sensitive subspace
-        z_free = self._proj(z_flat, self.B_sens)
+        # z_sens: projection onto sensitive subspace
+        z_sens = self._proj(z_flat, self.B_sens)
 
         # z_wm: global PRC
         z_wm = self.prc.sample_z_wm(batch_size=batch_size, device=self.device, dtype=z_flat.dtype)
 
         lam1 = float(self.lam1)
         lam2 = math.sqrt(1.0 - lam1*lam1)
-        zT_flat = lam1 * z_wm + lam2 * z_free
+        zT_flat = lam1 * z_wm + lam2 * z_sens
 
         zT = unflatten_latent(zT_flat, (batch_size, C, H, W_)).detach().requires_grad_(True)
         z_wm_T=unflatten_latent(z_wm, (batch_size, C, H, W_)).detach().requires_grad_(True)
@@ -635,8 +635,8 @@ class AlignPreserveNaW:
         return unflatten_latent(z_new, (B, C, H, W_))
 
 
-    def sps_refine(self, zT: torch.Tensor, prompt: str, negative_prompt: str, sps_cfg: SPSConfig, gen_cfg: DiffusionSamplerConfig) -> torch.Tensor:
-        """SPS: gradient update + global PRC repair each step."""
+    def ARR_refine(self, zT: torch.Tensor, prompt: str, negative_prompt: str, ARR_cfg: ARRConfig, gen_cfg: DiffusionSamplerConfig) -> torch.Tensor:
+        """ARR: gradient update + global PRC repair each step."""
         zT = zT.detach().requires_grad_(True)
             # repair (global PRC)
         zT = self.repair_prc_global(zT).detach().requires_grad_(True)
@@ -671,8 +671,8 @@ def cli_main():
     parser.add_argument("--model_id", type=str, required=True)
     parser.add_argument("--prompts", type=str, required=True)
     parser.add_argument("--clip_model", type=str, default="openai/clip-vit-base-patch32")
-    parser.add_argument("--clip_margin", type=float, default=0.2, help="CLIP hinge margin for SSC/SPS surrogate")
-    parser.add_argument("--save_zT", type=int, default=1, help="Save pre/post SPS zT tensors (.pt)")
+    parser.add_argument("--clip_margin", type=float, default=0.2, help="CLIP hinge margin for ssp/ARR surrogate")
+    parser.add_argument("--save_zT", type=int, default=1, help="Save pre/post ARR zT tensors (.pt)")
     parser.add_argument("--outdir", type=str, required=True)
     # ---- Export-only: directly export merged zT16 (prompt0) without generating images ----
     parser.add_argument("--export_zT16_only", type=int, default=0,
@@ -699,25 +699,25 @@ def cli_main():
     parser.add_argument("--gen_bs", type=int, default=4)
     parser.add_argument("--seed", type=int, default=12345)
 
-    # SSC params
-    parser.add_argument("--ssc_N_cal", type=int, default=12)
-    parser.add_argument("--ssc_energy_ratio", type=float, default=0.9)
-    parser.add_argument("--ssc_mini_steps", type=int, default=12)
-    parser.add_argument("--ssc_d_sens_max", type=int, default=64)
-    parser.add_argument("--ssc_d_wm", type=int, default=256)
-    parser.add_argument("--reuse_ssc", type=int, default=1, help="1: reuse ssc basis from outdir/wm_meta/ssc_basis.pt if present; 0: recompute")
+    # ssp params
+    parser.add_argument("--ssp_N_cal", type=int, default=12)
+    parser.add_argument("--ssp_energy_ratio", type=float, default=0.9)
+    parser.add_argument("--ssp_mini_steps", type=int, default=12)
+    parser.add_argument("--ssp_d_sens_max", type=int, default=64)
+    parser.add_argument("--ssp_d_wm", type=int, default=256)
+    parser.add_argument("--reuse_ssp", type=int, default=1, help="1: reuse ssp basis from outdir/wm_meta/ssp_basis.pt if present; 0: recompute")
     parser.add_argument("--lam1", type=float, default=0.6, help="Mixing weight for PRC watermark (lam1). zT = lam1*z_wm + (1-lam1)*Proj_Bsens(z)")
-    parser.add_argument("--zfree_scale", type=float, default=1.0, help="Scale factor for z_free in zT = z_wm + scale * z_free.")
+    parser.add_argument("--zfree_scale", type=float, default=1.0, help="Scale factor for z_sens in zT = z_wm + scale * z_sens.")
 
     # PRC params
     parser.add_argument("--prc_message_length", type=int, default=32)
     parser.add_argument("--prc_error_prob", type=float, default=0.01)
     parser.add_argument("--master_key", type=str, default="change_me")
 
-    # SPS params
-    parser.add_argument("--sps_T_r", type=int, default=1)
-    parser.add_argument("--sps_eta", type=float, default=0.05)
-    parser.add_argument("--sps_mini_steps", type=int, default=2)
+    # ARR params
+    parser.add_argument("--ARR_T_r", type=int, default=1)
+    parser.add_argument("--ARR_eta", type=float, default=0.05)
+    parser.add_argument("--ARR_mini_steps", type=int, default=2)
 
     args = parser.parse_args()
 
@@ -754,7 +754,7 @@ def cli_main():
         latent_shape=latent_shape,
         device=str(device),
     )
-    # mixing hyperparameter: zT = lam1*z_wm + (1-lam1)*z_free
+    # mixing hyperparameter: zT = lam1*z_wm + (1-lam1)*z_sens
     workflow.set_mix_lambda(float(args.lam1))
 
     prompts = read_prompts(args.prompts)
@@ -771,48 +771,48 @@ def cli_main():
     os.makedirs(meta_dir, exist_ok=True)
 
 
-    # --- Step 1: SSC (calibration prompts from the prompt file) ---
-    ssc_cache_path = os.path.join(meta_dir, "ssc_Bsens.pt")
-    use_ssc_cache = bool(int(getattr(args, "reuse_ssc", 1)))
-    loaded_ssc = False
+    # --- Step 1: ssp (calibration prompts from the prompt file) ---
+    ssp_cache_path = os.path.join(meta_dir, "ssp_Bsens.pt")
+    use_ssp_cache = bool(int(getattr(args, "reuse_ssp", 1)))
+    loaded_ssp = False
 
-    if use_ssc_cache and os.path.isfile(ssc_cache_path):
+    if use_ssp_cache and os.path.isfile(ssp_cache_path):
         try:
-            ckpt = torch.load(ssc_cache_path, map_location="cpu")
+            ckpt = torch.load(ssp_cache_path, map_location="cpu")
             B_sens = ckpt.get("B_sens", None)
             if B_sens is None:
                 raise ValueError("Cache missing B_sens")
             if int(B_sens.shape[0]) != int(workflow.D):
                 raise ValueError(f"D mismatch: cached D={int(B_sens.shape[0])} vs current D={int(workflow.D)}")
             workflow.B_sens = B_sens.to(device=workflow.device, dtype=torch.float32)
-            print(f"[SSC] Reusing cached B_sens from {ssc_cache_path} (d_sens={int(workflow.B_sens.shape[1])}).")
-            loaded_ssc = True
+            print(f"[ssp] Reusing cached B_sens from {ssp_cache_path} (d_sens={int(workflow.B_sens.shape[1])}).")
+            loaded_ssp = True
         except Exception as e:
-            print(f"[SSC] Failed to load cached SSC basis: {e}. Recomputing...")
+            print(f"[ssp] Failed to load cached ssp basis: {e}. Recomputing...")
 
-    if not loaded_ssc:
-        cal = (prompts if len(prompts) <= int(args.ssc_N_cal) else random.sample(prompts, k=int(args.ssc_N_cal)))[: int(args.ssc_N_cal)]
-        ssc_cfg = SSCConfig(
+    if not loaded_ssp:
+        cal = (prompts if len(prompts) <= int(args.ssp_N_cal) else random.sample(prompts, k=int(args.ssp_N_cal)))[: int(args.ssp_N_cal)]
+        ssp_cfg = sspConfig(
             N_cal=len(cal),
             guidance_scale=7.5,
-            d_sens_max=int(args.ssc_d_sens_max),
-            d_wm=int(getattr(args, 'ssc_d_wm', 0)),  # legacy arg, unused in this PRC-global variant
-            energy_ratio=float(args.ssc_energy_ratio),
-            mini_steps=int(args.ssc_mini_steps),
+            d_sens_max=int(args.ssp_d_sens_max),
+            d_wm=int(getattr(args, 'ssp_d_wm', 0)),  # legacy arg, unused in this PRC-global variant
+            energy_ratio=float(args.ssp_energy_ratio),
+            mini_steps=int(args.ssp_mini_steps),
         )
-        print(f"[SSC] Running SSC with N_cal={ssc_cfg.N_cal}, d_sens_max={ssc_cfg.d_sens_max} ...")
-        stats = workflow.run_ssc(cal, ssc_cfg)
-        print(f"[SSC] d_sens={int(stats['d_sens'].item())}")
+        print(f"[ssp] Running ssp with N_cal={ssp_cfg.N_cal}, d_sens_max={ssp_cfg.d_sens_max} ...")
+        stats = workflow.run_ssp(cal, ssp_cfg)
+        print(f"[ssp] d_sens={int(stats['d_sens'].item())}")
 
         torch.save(
             {
                 "B_sens": workflow.B_sens.detach().cpu() if workflow.B_sens is not None else None,
-                "ssc_cfg": vars(ssc_cfg),
+                "ssp_cfg": vars(ssp_cfg),
                 "latent_shape": latent_shape,
                 "model_id": args.model_id,
                 "scheduler": "DPMSolverMultistepScheduler",
             },
-            ssc_cache_path,
+            ssp_cache_path,
         )
         with open(os.path.join(meta_dir, "cal_prompts.txt"), "w", encoding="utf-8") as f:
             for pp in cal:
@@ -830,9 +830,9 @@ def cli_main():
     workflow.set_prc(prc)
     prc.dump_runtime_artifacts(meta_dir)
 
-    # SPS and full sampling configs
-    sps_cfg = SPSConfig(T_r=int(args.sps_T_r), eta=float(args.sps_eta), normalize_grad=True, mini_steps=int(args.sps_mini_steps))
-    full_cfg = DiffusionSamplerConfig(num_steps=int(args.steps), guidance_scale=float(args.cfg), eta=0.0, mini_steps=int(args.sps_mini_steps))
+    # ARR and full sampling configs
+    ARR_cfg = ARRConfig(T_r=int(args.ARR_T_r), eta=float(args.ARR_eta), normalize_grad=True, mini_steps=int(args.ARR_mini_steps))
+    full_cfg = DiffusionSamplerConfig(num_steps=int(args.steps), guidance_scale=float(args.cfg), eta=0.0, mini_steps=int(args.ARR_mini_steps))
 
     if export_only:
         if len(prompts) == 0:
@@ -856,17 +856,17 @@ def cli_main():
             seed = int(args.seed) + idx
             set_seed_everywhere(seed)
 
-            zT, z_wm = workflow.ebs_sample(
+            zT, z_wm = workflow.SSM_sample(
                 batch_size=1,
                 seed=seed,
                 latent_chw=(C, H, W),
             )
 
-            zT_refined = workflow.sps_refine(
+            zT_refined = workflow.ARR_refine(
                 zT,
                 prompt=prompt0,
                 negative_prompt=args.negative_prompt,
-                sps_cfg=sps_cfg,
+                ARR_cfg=ARR_cfg,
                 gen_cfg=full_cfg,
             )
 

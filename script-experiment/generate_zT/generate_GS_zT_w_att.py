@@ -1,15 +1,3 @@
-# naw_align_preserve.py
-# Implements SSC + EBS + SPS workflow and 3 watermark constraint families:
-# (A) projection/sign-margin, (B) quantile-bin, (C) frequency-mask
-#
-# Dependencies (typical):
-#   pip install torch diffusers transformers accelerate safetensors
-#
-# Notes:
-# - This research script is intended to run in float32 for gradient stability.
-# - Mini-sampler uses differentiable DDIM steps in latent space.
-# - Surrogate uses CLIP alignment hinge loss (fully differentiable).
-
 from __future__ import annotations
 import math
 import hashlib
@@ -63,11 +51,6 @@ def projector_from_basis(B: torch.Tensor) -> torch.Tensor:
     return B @ B.transpose(0, 1)
 
 def project_rows_onto_basis(X: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
-    """
-    Orthogonal projection of row-vectors X onto the subspace spanned by columns of B.
-    X: (N, D) or (B, D); B: (D, k) with orthonormal columns.
-    Returns: (N, D) = X @ (B B^T) but computed as (X B) B^T to avoid materializing (D,D).
-    """
     # (N,D)@(D,k)->(N,k); then (N,k)@(k,D)->(N,D)
     return (X @ B) @ B.transpose(0, 1)
 
@@ -121,16 +104,6 @@ class DiffusionSamplerConfig:
     # You can override per-call.
 
 class DiffusionLatentSampler:
-    """
-    A minimal differentiable sampler wrapper for diffusers StableDiffusionPipeline-like objects.
-    It performs UNet denoising steps using the pipeline's scheduler, in torch.enable_grad mode.
-
-    Expected pipeline components:
-      - pipe.text_encoder, pipe.tokenizer
-      - pipe.unet
-      - pipe.scheduler (DDIMScheduler or compatible)
-      - pipe.vae (for decode)
-    """
     def __init__(self, pipe, device: torch.device, dtype: torch.dtype = torch.float32):
         self.pipe = pipe
         self.device = device
@@ -281,16 +254,8 @@ class DiffusionLatentSampler:
                 latents = scheduler.step(eps, t, latents).prev_sample
 
         return latents
-# -----------------------------
-# Surrogate: CLIP hinge loss
-# -----------------------------
 
 class CLIPHingeSurrogate(torch.nn.Module):
-    """
-    S(X,C) example: hinge on CLIPSim(image, prompt).
-    Lower loss => better alignment.
-    This is differentiable w.r.t. image pixels.
-    """
     def __init__(self, clip_model_id: str = "openai/clip-vit-base-patch32", device: str = "cuda"):
         super().__init__()
         from transformers import CLIPModel, CLIPProcessor
@@ -305,10 +270,6 @@ class CLIPHingeSurrogate(torch.nn.Module):
             p.requires_grad_(False)
 
     def forward(self, images_01: torch.Tensor, prompt: str, margin: float = 0.25) -> torch.Tensor:
-        """
-        images_01: (B,3,H,W) float in [0,1]
-        returns scalar loss
-        """
         # CLIPProcessor is not differentiable (it uses PIL/np). We'll do a simple differentiable preprocess:
         # resize to 224 and normalize with CLIP mean/std.
         B = images_01.shape[0]
@@ -331,12 +292,6 @@ class CLIPHingeSurrogate(torch.nn.Module):
         print("sim:", sim.detach().cpu().tolist(), "margin:", margin, "loss:", loss.item())
         return loss
 
-
-# -----------------------------
-# Gaussian Shading (QBin) official helpers
-# Copied from key_to_latent_cluster_official_gs.py (integrated official code).
-# We will update global C,H,W at runtime to match the current latent resolution.
-# -----------------------------
 C, H, W = 4, 64, 64
 
 def bits_bin_to_bytes(bits: str) -> bytes:
@@ -399,15 +354,6 @@ def diffuse_bits_to_chw(base_bits: np.ndarray, fc: int, fhw: int) -> np.ndarray:
     return sd_hw.astype(np.int8)
 
 def chacha20_xor_bits(bits_c_hw: np.ndarray, key32: bytes, nonce12: bytes) -> np.ndarray:
-    """XOR bits with ChaCha20 keystream, matching the official Gaussian Shading implementation.
-
-    Official code path (Gaussian-Shading/watermark.py) does:
-        m_byte = cipher.encrypt(np.packbits(sd).tobytes())
-        m_bit  = np.unpackbits(np.frombuffer(m_byte, dtype=np.uint8))
-
-    That uses numpy's default pack/unpack bit order (MSB-first within each byte).
-    We replicate the same semantics here, and then trim any padding bits if needed.
-    """
     flat = bits_c_hw.reshape(-1).astype(np.uint8)
     packed = np.packbits(flat)  # default MSB-first, same as official
     cipher = ChaCha20.new(key=key32, nonce=nonce12)  # 32B key + 12B nonce
@@ -599,7 +545,7 @@ class FrequencyMaskFamily(WatermarkFamilyBase):
                  latent_shape: Tuple[int, int, int]):  # (C,H,W)
         super().__init__(D, wm_cfg, B_wm)
         self.C, self.H, self.W = latent_shape
-        # Cache per-(K,B) to avoid regenerating masks/patterns across SPS iterations.
+        # Cache per-(K,B) to avoid regenerating masks/patterns across ARR iterations.
         self._cache: Dict[Tuple[bytes, int], Tuple[torch.Tensor, torch.Tensor]] = {}
 
     def _derive_seed(self, K: bytes) -> int:
@@ -775,11 +721,11 @@ def build_family(D: int, wm_cfg: WatermarkConfig, B_wm: torch.Tensor,
     raise ValueError(f"Unknown family={wm_cfg.family}")
 
 # -----------------------------
-# Main workflow: SSC + EBS + SPS
+# Main workflow: ssp + SSM + ARR
 # -----------------------------
 
 @dataclass
-class SSCConfig:
+class sspConfig:
     N_cal: int = 64
     d_sens_max: int = 64
     energy_ratio: float = 0.90
@@ -789,7 +735,7 @@ class SSCConfig:
     eta_ddim: float = 0.0
 
 @dataclass
-class SPSConfig:
+class ARRConfig:
     T_r: int = 2
     eta: float = 0.15
     normalize_grad: bool = True
@@ -804,68 +750,66 @@ class AlignPreserveNaW:
     def __init__(self, sampler: DiffusionLatentSampler, surrogate: Callable[[torch.Tensor, str], torch.Tensor],
                  latent_shape: Tuple[int,int,int,int], device: str = "cuda"):
         self.sampler = sampler
-        self.surrogate = surrogate#可微的函数
+        self.surrogate = surrogate
         self.device = torch.device(device)
         self.latent_shape = latent_shape  # (B,C,H,W)
-        self.D = latent_shape[1] * latent_shape[2] * latent_shape[3]#展平的长度
-        # to be filled by SSC:
+        self.D = latent_shape[1] * latent_shape[2] * latent_shape[3]
+        # to be filled by ssp:
         self.B_sens: Optional[torch.Tensor] = None  # (D, d_sens)
         # Retained for backward compatibility; unused in the current GS workflow
         self.B_wm: Optional[torch.Tensor] = None
         self.P_wm: Optional[torch.Tensor] = None
         self.P_free: Optional[torch.Tensor] = None
 
-        # EBS mix weights: lambda1^2 + lambda2^2 = 1
+        # SSM mix weights: lambda1^2 + lambda2^2 = 1
         self.lambda1: float = 1.0
         self.lambda2: float = 0.0
 
         # Backward compatibility fields; unused in the current GS workflow.
         self.zfree_scale: float = 1.0
-        self.gs_latent_seed = None  # optional seed for GS latent sampling (z_wm,z_free)
+        self.gs_latent_seed = None  # optional seed for GS latent sampling (z_wm,z_sens)
 
-        # For saving/debugging: last EBS components (detached)
+        # For saving/debugging: last SSM components (detached)
         self._last_z_wm: Optional[torch.Tensor] = None   # (B,C,H,W)
-        self._last_z_free: Optional[torch.Tensor] = None # (B,C,H,W)
+        self._last_z_sens: Optional[torch.Tensor] = None # (B,C,H,W)
 
 
         # cache for Gaussian Shading bits (computed once per (key, nonce, seed, fc, fhw, latent_shape))
         self._gs_cached_sig: Optional[tuple] = None
         self._gs_cached_m_bits_np: Optional[np.ndarray] = None  # (C,H,W) int8 in {0,1} on CPU
         self._gs_cached_mask_pos: Optional[torch.Tensor] = None  # (1,C,H,W) bool on device
-    def run_ssc(self, prompts: List[str], ssc_cfg: SSCConfig) -> Dict[str, torch.Tensor]:
+    def run_ssp(self, prompts: List[str], ssp_cfg: sspConfig) -> Dict[str, torch.Tensor]:
         """
         Estimate U_sens by gradient stats, then construct U_wm away from it.
         """
-        assert len(prompts) >= ssc_cfg.N_cal, "Need at least N_cal prompts for SSC calibration."
-        #是否不少于所需的最小数量
+        assert len(prompts) >= ssp_cfg.N_cal, "Need at least N_cal prompts for ssp calibration."
         B = 1
 
         grads = []
-        for i in range(ssc_cfg.N_cal):
+        for i in range(ssp_cfg.N_cal):
             prompt = prompts[i]
             # random zT
             C, H, W_ = self.latent_shape[1], self.latent_shape[2], self.latent_shape[3]
             zT = torch.randn((1, C, H, W_), device=self.device, dtype=torch.float32, requires_grad=True)
 
             cfg = DiffusionSamplerConfig(
-                num_steps=ssc_cfg.mini_steps,
-                guidance_scale=ssc_cfg.guidance_scale,
-                eta=ssc_cfg.eta_ddim,
-                mini_steps=ssc_cfg.mini_steps
+                num_steps=ssp_cfg.mini_steps,
+                guidance_scale=ssp_cfg.guidance_scale,
+                eta=ssp_cfg.eta_ddim,
+                mini_steps=ssp_cfg.mini_steps
             )
-            x_tilde = self.sampler.mini_sample_image(zT, prompt, cfg)#生成中间图像
-            loss = self.surrogate(x_tilde, prompt)#计算损失函数，这个具体的函数得看损失函数
-            g = torch.autograd.grad(loss, zT, retain_graph=False, create_graph=False)[0]#计算梯度（潜变量对损失的影响）
-            #梯度处理与收集
+            x_tilde = self.sampler.mini_sample_image(zT, prompt, cfg)
+            loss = self.surrogate(x_tilde, prompt)
+            g = torch.autograd.grad(loss, zT, retain_graph=False, create_graph=False)[0]
+
             g_flat = flatten_latent(g).detach().cpu()  # (1,D)
             grads.append(g_flat)
-        #拼接梯度矩阵，之后才能去分析
         G = torch.cat(grads, dim=0)  # (N_cal, D)
 
         # randomized SVD / PCA
-        k_try = min(ssc_cfg.d_sens_max, min(G.shape) - 1)
+        k_try = min(ssp_cfg.d_sens_max, min(G.shape) - 1)
         _, S, Vt = randomized_svd_topk(G, k=k_try)  # Vt: (k_try, D)
-        d_sens = explained_energy_to_rank(S, ratio=ssc_cfg.energy_ratio)
+        d_sens = explained_energy_to_rank(S, ratio=ssp_cfg.energy_ratio)
 
         B_sens = Vt[:d_sens].transpose(0, 1).contiguous()  # (D, d_sens)
         B_sens = orthonormalize_cols_qr(B_sens)
@@ -880,19 +824,19 @@ class AlignPreserveNaW:
             "d_sens": torch.tensor([int(self.B_sens.shape[1])], device=self.device),
         }
 
-    def ebs_sample(self, W: bytes, K: bytes, wm_cfg: WatermarkConfig) -> torch.Tensor:
+    def SSM_sample(self, W: bytes, K: bytes, wm_cfg: WatermarkConfig) -> torch.Tensor:
         """
         Step 2: Entropy-Buffered Sampling:
-          Z_free ~ N(0,I), project to free;
+          z_sens ~ N(0,I), project to free;
           Z_wm   ~ N(0,I), project to wm and apply constraint operator;
-          Z_T = Z_wm + Z_free
-        Returns zT in (B,C,H,W), requires_grad=True (for SPS).
+          Z_T = Z_wm + z_sens
+        Returns zT in (B,C,H,W), requires_grad=True (for ARR).
         """
-        assert self.B_sens is not None, "Call run_ssc() first."
+        assert self.B_sens is not None, "Call run_ssp() first."
         B, C, H, W_ = self.latent_shape
         # Specialization for Tree-Ring / frequency-mask family:
         # For wm_cfg.family == "freq", define the watermark subspace directly in Fourier domain:
-        #   Z_free = Z * (~M),  Z_wm = Z * M, where M is the Tree-Ring frequency mask.
+        #   z_sens = Z * (~M),  Z_wm = Z * M, where M is the Tree-Ring frequency mask.
         # This avoids mixing a frequency-mask watermark with a random projection basis (B_wm).
 
 
@@ -939,13 +883,13 @@ class AlignPreserveNaW:
             z_wm = torch.randn((B, C, H, W_), device=device, generator=gen)
             z_wm = torch.where(mask_pos, z_wm.abs(), -z_wm.abs())  # bit=1 -> +|z|, bit=0 -> -|z|
 
-            # ---- (2) sample z ~ N(0,I) and project onto B_sens: z_free = B_sens(B_sens^T z) ----
+            # ---- (2) sample z ~ N(0,I) and project onto B_sens: z_sens = B_sens(B_sens^T z) ----
             z = torch.randn((B, self.D), device=device, generator=gen)
-            z_free_flat = project_rows_onto_basis(z, self.B_sens)              # (B,D)
-            z_free = unflatten_latent(z_free_flat, (B, C, H, W_))              # (B,C,H,W)
+            z_sens_flat = project_rows_onto_basis(z, self.B_sens)              # (B,D)
+            z_sens = unflatten_latent(z_sens_flat, (B, C, H, W_))              # (B,C,H,W)
 
             # ---- (3) mix with lambda1^2 + lambda2^2 = 1 ----
-            zT = (self.lambda1 * z_wm + self.lambda2 * z_free)
+            zT = (self.lambda1 * z_wm + self.lambda2 * z_sens)
             return zT.detach().requires_grad_(True)
 
     def repair_only_wm(self, zT: torch.Tensor, W: bytes, K: bytes, wm_cfg: WatermarkConfig) -> torch.Tensor:
@@ -976,8 +920,8 @@ class AlignPreserveNaW:
 
         # Specialization for Gaussian Shading (gsqbin):
         # (1) Embed watermark into a standard normal latent z_wm using the official distribution-preserving sampler.
-        # (2) Sample a fresh Gaussian latent z ~ N(0,I) and project it onto the sensitive subspace B_sens to get z_free.
-        # (3) Mix: zT = lambda1 * z_wm + lambda2 * z_free, with lambda1^2 + lambda2^2 = 1.
+        # (2) Sample a fresh Gaussian latent z ~ N(0,I) and project it onto the sensitive subspace B_sens to get z_sens.
+        # (3) Mix: zT = lambda1 * z_wm + lambda2 * z_sens, with lambda1^2 + lambda2^2 = 1.
         if wm_cfg.family == "gsqbin":
             # set module-level (C,H,W) for copied GS helpers (avoid Python 'global' clash with local C/H)
             globals()['C'] = int(C)
@@ -1004,21 +948,21 @@ class AlignPreserveNaW:
 
         # Fallback: no-op repair for unsupported watermark families in this script.
         return zT
-    def sps_refine(self, zT: torch.Tensor, prompt: str, W: bytes, K: bytes,
-                   wm_cfg: WatermarkConfig, sps_cfg: SPSConfig) -> torch.Tensor:
-        """SPS loop (REPAIR-ONLY mode).
+    def ARR_refine(self, zT: torch.Tensor, prompt: str, W: bytes, K: bytes,
+                   wm_cfg: WatermarkConfig, ARR_cfg: ARRConfig) -> torch.Tensor:
+        """ARR loop (REPAIR-ONLY mode).
 
         We remove the surrogate gradient update to make this stage a *pure watermark repair*.
         Concretely, for T_r iterations we only apply the repair operator (fix GS sign-bin) on zT.
 
-        This configuration treats SPS as a repair-only step rather than an alignment or attack step.
+        This configuration treats ARR as a repair-only step rather than an alignment or attack step.
         but a deterministic watermark-recovery step.
         """
-        if int(sps_cfg.T_r) <= 0:
+        if int(ARR_cfg.T_r) <= 0:
             return zT
         # No gradients needed in repair-only mode
         with torch.no_grad():
-            for _ in range(int(sps_cfg.T_r)):
+            for _ in range(int(ARR_cfg.T_r)):
                 zT = self.repair_only_wm(zT, W=W, K=K, wm_cfg=wm_cfg)
         return zT
 
@@ -1079,7 +1023,7 @@ def _make_grid_pil(imgs, rows: int, cols: int, pad: int = 8, bg=(255,255,255)):
 
 def main():
     """
-    Batch generator (Gaussian Shading (official embed) + B_sens projection mix + SPS + DPM scheduler).
+    Batch generator (Gaussian Shading (official embed) + B_sens projection mix + ARR + DPM scheduler).
 
     What it does (aligned with eval/vis_generate-slice_multi-12.05.py):
       - read prompts from a txt file
@@ -1090,7 +1034,7 @@ def main():
 
     Notes:
       - We only generate *watermarked* images (no NoWM branch).
-      - We keep changes minimal: reuse the existing workflow (SSC + freqEBS + SPS + full sampling).
+      - We keep changes minimal: reuse the existing workflow (ssp + freqSSM + ARR + full sampling).
       - Scheduler is DPM-Solver Multistep, consistent with the aligned generator configuration.
     """
     import argparse
@@ -1099,13 +1043,13 @@ def main():
     from datetime import datetime
     from diffusers import StableDiffusionPipeline, DPMSolverMultistepScheduler
 
-    parser = argparse.ArgumentParser(description='Batch generate Tree-Ring watermarked images (freqEBS + DPM).')
+    parser = argparse.ArgumentParser(description='Batch generate Tree-Ring watermarked images (freqSSM + DPM).')
 
     # IO
     parser.add_argument('--prompts', type=str, required=True, help='Path to a .txt file, one prompt per line.')
     parser.add_argument('--outdir', type=str, required=True, help='Output directory.')
     parser.add_argument('--prompt_set', type=str, default='', help='Optional prompt set name in manifest.')
-    parser.add_argument('--group', type=str, default='TRWM_freqEBS_DPM', help='Group name in manifest.')
+    parser.add_argument('--group', type=str, default='TRWM_freqSSM_DPM', help='Group name in manifest.')
     parser.add_argument('--label', type=str, default='TRWM', help='Label name in manifest.')
 
     # SD
@@ -1121,11 +1065,11 @@ def main():
     parser.add_argument('--cols', type=int, default=4)
     parser.add_argument('--num_per_prompt', type=int, default=0, help='If 0, use rows*cols.')
     parser.add_argument('--gen_bs', type=int, default=1, help='Micro-batch size per prompt to control GPU memory. Generate in chunks and stitch into a grid. If <=0, use full num_per_prompt.')
-    parser.add_argument('--lambda1', type=float, default=0.8, help='EBS mixing weight for the GS watermarked latent: zT = lambda1*z_wm + lambda2*z_free, with lambda1^2+lambda2^2=1. lambda2 is derived from lambda1.')
+    parser.add_argument('--lambda1', type=float, default=0.8, help='SSM mixing weight for the GS watermarked latent: zT = lambda1*z_wm + lambda2*z_sens, with lambda1^2+lambda2^2=1. lambda2 is derived from lambda1.')
 
     # Save zT for decoding (bypass inversion)
     parser.add_argument('--save_zt', action='store_true', help='Save initial/refined zT latents (.pt) under outdir/latents for direct GS decoding (no inversion).')
-    parser.add_argument('--save_zt_mode', type=str, default='both', choices=['ebs','refined','both'], help="Which zT to save: 'ebs' (after EBS), 'refined' (after SPS+repair), or 'both'.")
+    parser.add_argument('--save_zt_mode', type=str, default='both', choices=['SSM','refined','both'], help="Which zT to save: 'SSM' (after SSM), 'refined' (after ARR+repair), or 'both'.")
     parser.add_argument('--save_zt_fp16', action='store_true', help='Save zT tensors in fp16 to reduce disk (default fp32). Not recommended if you want exact reproducibility debugging.')
 
     # Export-only: generate ONE repaired zT tensor (shape [n_zt,4,64,64]) and exit (no image decoding).
@@ -1133,21 +1077,21 @@ def main():
     parser.add_argument("--export_latents_dir", type=str, default="/home/yancy/work/dm_backdoor_latent_space/experiment-1_19/latents_experiment", help="Where to save the exported zT tensor.")
     parser.add_argument("--export_latents_name", type=str, default="generate_GS_w_att.pt", help="Filename of the exported zT tensor.")
     parser.add_argument("--n_zt", type=int, default=16, help="Number of zT samples to export when --export_zt_only is set (default 16).")
-    parser.add_argument("--zt_seed", type=int, default=12345, help="Seed for sampling z_wm and z_free in GS EBS (controls diversity across the n_zt samples).")
+    parser.add_argument("--zt_seed", type=int, default=12345, help="Seed for sampling z_wm and z_sens in GS SSM (controls diversity across the n_zt samples).")
 
-    # Surrogate + SPS
+    # Surrogate + ARR
     parser.add_argument('--margin', type=float, default=0.2, help='CLIP hinge margin.')
-    parser.add_argument('--sps_T_r', type=int, default=2)
-    parser.add_argument('--sps_eta', type=float, default=0.15)
-    parser.add_argument('--sps_mini_steps', type=int, default=6)
+    parser.add_argument('--ARR_T_r', type=int, default=2)
+    parser.add_argument('--ARR_eta', type=float, default=0.15)
+    parser.add_argument('--ARR_mini_steps', type=int, default=6)
 
-    # SSC
-    parser.add_argument('--ssc_N_cal', type=int, default=12)
-    parser.add_argument('--ssc_mini_steps', type=int, default=6)
-    parser.add_argument('--ssc_energy_ratio', type=float, default=0.90)
-    parser.add_argument('--ssc_d_sens_max', type=int, default=64)
-    parser.add_argument('--ssc_d_wm', type=int, default=256)
-    parser.add_argument('--ssc_cache', type=str, default='', help='Path to cached SSC bases (.pt). If exists, load and reuse; otherwise compute once and save.')
+    # ssp
+    parser.add_argument('--ssp_N_cal', type=int, default=12)
+    parser.add_argument('--ssp_mini_steps', type=int, default=6)
+    parser.add_argument('--ssp_energy_ratio', type=float, default=0.90)
+    parser.add_argument('--ssp_d_sens_max', type=int, default=64)
+    parser.add_argument('--ssp_d_wm', type=int, default=256)
+    parser.add_argument('--ssp_cache', type=str, default='', help='Path to cached ssp bases (.pt). If exists, load and reuse; otherwise compute once and save.')
 
     # Gaussian Shading params (official-integrated)
     parser.add_argument('--gs_key_ones', action='store_true', help='Use 32B all-ones key (default if no other key provided).')
@@ -1164,7 +1108,6 @@ def main():
     # (Tree-Ring args removed in GS script)
 
     args = parser.parse_args()
-    # Default to key_ones when no explicit key input is provided
     if (not args.gs_key_ones) and (args.gs_key_hex is None) and (args.gs_key_bin is None):
         args.gs_key_ones = True
 
@@ -1218,7 +1161,7 @@ def main():
         latent_shape=latent_shape,
         device=device,
     )
-    # EBS mixing weights (lambda1^2 + lambda2^2 = 1)
+    # SSM mixing weights (lambda1^2 + lambda2^2 = 1)
     workflow.lambda1 = float(args.lambda1)
     if workflow.lambda1 < 0:
         raise ValueError('--lambda1 must be >= 0')
@@ -1228,31 +1171,26 @@ def main():
     workflow.lambda2 = float((max(0.0, 1.0 - workflow.lambda1 * workflow.lambda1)) ** 0.5)
     workflow.gs_latent_seed = int(getattr(args, "zt_seed", 12345))
 
-
-    # --- SSC calibration (cached) ---
-    # SSC is expensive; by default we compute it once and cache the bases (B_sens, B_wm) to disk.
-    # If --ssc_cache points to an existing file, we load and reuse it.
-    # This avoids recomputing SSC for every run / prompt set.
-    cal = (prompts * ((args.ssc_N_cal + len(prompts) - 1) // len(prompts)))[: args.ssc_N_cal]
-    ssc_cfg = SSCConfig(
-        N_cal=args.ssc_N_cal,
-        d_sens_max=args.ssc_d_sens_max,
-        energy_ratio=float(args.ssc_energy_ratio),
-        d_wm=args.ssc_d_wm,
-        mini_steps=args.ssc_mini_steps,
+    cal = (prompts * ((args.ssp_N_cal + len(prompts) - 1) // len(prompts)))[: args.ssp_N_cal]
+    ssp_cfg = sspConfig(
+        N_cal=args.ssp_N_cal,
+        d_sens_max=args.ssp_d_sens_max,
+        energy_ratio=float(args.ssp_energy_ratio),
+        d_wm=args.ssp_d_wm,
+        mini_steps=args.ssp_mini_steps,
         guidance_scale=7.5,
         eta_ddim=0.0,
     )
 
-    # default cache path: under outdir (per-run). For persistent reuse, set --ssc_cache to a fixed path.
-    ssc_cache_path = args.ssc_cache.strip() if hasattr(args, "ssc_cache") and args.ssc_cache else os.path.join(
-        outdir, f"ssc_cache_D{workflow.D}_Ns{ssc_cfg.N_cal}_er{float(ssc_cfg.energy_ratio):.3f}_bsensOnly.pt"
+    # default cache path: under outdir (per-run). For persistent reuse, set --ssp_cache to a fixed path.
+    ssp_cache_path = args.ssp_cache.strip() if hasattr(args, "ssp_cache") and args.ssp_cache else os.path.join(
+        outdir, f"ssp_cache_D{workflow.D}_Ns{ssp_cfg.N_cal}_er{float(ssp_cfg.energy_ratio):.3f}_bsensOnly.pt"
     )
 
     loaded = False
-    if ssc_cache_path and os.path.exists(ssc_cache_path):
+    if ssp_cache_path and os.path.exists(ssp_cache_path):
         try:
-            ckpt = torch.load(ssc_cache_path, map_location="cpu")
+            ckpt = torch.load(ssp_cache_path, map_location="cpu")
             if (ckpt.get("D", None) == workflow.D) and (ckpt.get("bwm_mode", "") in ["bsens_only", "bsensOnly", "none"]):
                 workflow.B_sens = ckpt["B_sens"].to(workflow.device)
                 workflow.B_wm = None
@@ -1263,36 +1201,36 @@ def main():
                     "d_sens": torch.tensor([int(d_sens_val)], device=workflow.device),
                 }
                 loaded = True
-                print(f"[SSC] loaded cache: {ssc_cache_path}")
+                print(f"[ssp] loaded cache: {ssp_cache_path}")
             else:
-                print(f"[SSC] cache mismatch, recompute. cache(D={ckpt.get('D')}, mode={ckpt.get('bwm_mode')}) != current(D={workflow.D}, mode=bsens_only)")
+                print(f"[ssp] cache mismatch, recompute. cache(D={ckpt.get('D')}, mode={ckpt.get('bwm_mode')}) != current(D={workflow.D}, mode=bsens_only)")
         except Exception as e:
-            print(f"[SSC] failed to load cache ({ssc_cache_path}): {e}. Will recompute.")
+            print(f"[ssp] failed to load cache ({ssp_cache_path}): {e}. Will recompute.")
 
     if not loaded:
-        stats = workflow.run_ssc(cal, ssc_cfg)
+        stats = workflow.run_ssp(cal, ssp_cfg)
         try:
-            Path(ssc_cache_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(ssp_cache_path).parent.mkdir(parents=True, exist_ok=True)
             torch.save(
                 {
                     "D": workflow.D,
                     "bwm_mode": "bsens_only",
                     "d_sens": int(stats["d_sens"].item()),
                     "B_sens": stats["B_sens"].detach().cpu(),
-                    "ssc_cfg": {
-                        "N_cal": int(ssc_cfg.N_cal),
-                        "d_sens_max": int(ssc_cfg.d_sens_max),
-                        "energy_ratio": float(ssc_cfg.energy_ratio),
-                        "mini_steps": int(ssc_cfg.mini_steps),
+                    "ssp_cfg": {
+                        "N_cal": int(ssp_cfg.N_cal),
+                        "d_sens_max": int(ssp_cfg.d_sens_max),
+                        "energy_ratio": float(ssp_cfg.energy_ratio),
+                        "mini_steps": int(ssp_cfg.mini_steps),
                     },
                 },
-                ssc_cache_path,
+                ssp_cache_path,
             )
-            print(f"[SSC] saved cache: {ssc_cache_path}")
+            print(f"[ssp] saved cache: {ssp_cache_path}")
         except Exception as e:
-            print(f"[SSC] failed to save cache ({ssc_cache_path}): {e}")
+            print(f"[ssp] failed to save cache ({ssp_cache_path}): {e}")
 
-    print(f"[SSC] d_sens={int(stats['d_sens'].item())}")
+    print(f"[ssp] d_sens={int(stats['d_sens'].item())}")
 
     W = b''
     # Gaussian Shading key/nonce parsing (official-integrated)
@@ -1313,7 +1251,7 @@ def main():
     # --- Watermark config (Gaussian Shading as gsqbin family) ---
     wm_cfg = WatermarkConfig(
         family='gsqbin',
-        J=args.ssc_d_wm,
+        J=args.ssp_d_wm,
         tau=0.5,
         device=device,
 
@@ -1326,47 +1264,47 @@ def main():
         gs_l=1,
     )
 
-    # SPS and full sampling configs
-    sps_cfg = SPSConfig(
-        T_r=int(args.sps_T_r),
-        eta=float(args.sps_eta),
+    # ARR and full sampling configs
+    ARR_cfg = ARRConfig(
+        T_r=int(args.ARR_T_r),
+        eta=float(args.ARR_eta),
         normalize_grad=True,
-        mini_steps=int(args.sps_mini_steps),
+        mini_steps=int(args.ARR_mini_steps),
         guidance_scale=7.5,
         eta_ddim=0.0,
     )
-    full_cfg = DiffusionSamplerConfig(num_steps=int(args.steps), guidance_scale=float(args.cfg), eta=0.0, mini_steps=int(args.sps_mini_steps))
+    full_cfg = DiffusionSamplerConfig(num_steps=int(args.steps), guidance_scale=float(args.cfg), eta=0.0, mini_steps=int(args.ARR_mini_steps))
 
 
     # -----------------------------
-    # Export-only: generate ONE SPS-repaired zT tensor and exit
+    # Export-only: generate ONE ARR-repaired zT tensor and exit
     # -----------------------------
     if bool(getattr(args, "export_zt_only", False)):
         export_dir = Path(str(args.export_latents_dir))
         export_dir.mkdir(parents=True, exist_ok=True)
         export_path = export_dir / str(args.export_latents_name)
 
-        # Any prompt works here (SPS is repair-only now).
+        # Any prompt works here (ARR is repair-only now).
         prompt0 = prompts[0] if len(prompts) > 0 else ""
 
-        # Step 2: EBS (GS watermark + B_sens projected free component)
-        zT_all = workflow.ebs_sample(W=W, K=K, wm_cfg=wm_cfg).detach()  # (n,4,64,64)
+        # Step 2: SSM (GS watermark + B_sens projected free component)
+        zT_all = workflow.SSM_sample(W=W, K=K, wm_cfg=wm_cfg).detach()  # (n,4,64,64)
 
-        # Step 3: SPS (repair-only loop)
+        # Step 3: ARR (repair-only loop)
         gen_bs = int(args.gen_bs) if int(args.gen_bs) > 0 else n
         gen_bs = min(gen_bs, n)
         zT_ref_cpu = torch.empty_like(zT_all.detach().to("cpu"))
         for start in range(0, n, gen_bs):
             mb = min(gen_bs, n - start)
             zT = zT_all[start:start + mb].detach()
-            zT_ref = workflow.sps_refine(zT, prompt=prompt0, W=W, K=K, wm_cfg=wm_cfg, sps_cfg=sps_cfg)
+            zT_ref = workflow.ARR_refine(zT, prompt=prompt0, W=W, K=K, wm_cfg=wm_cfg, ARR_cfg=ARR_cfg)
             zT_ref_cpu[start:start + mb] = zT_ref.detach().to("cpu")
 
         save_obj = {
             "latents": zT_ref_cpu,
             "meta": {
                 "method": "GaussianShading",
-                "mode": "w_att_sps_repair_only",
+                "mode": "w_att_ARR_repair_only",
                 "shape": list(zT_ref_cpu.shape),
                 "gs": {
                     "seed": int(args.gs_seed),
@@ -1377,17 +1315,17 @@ def main():
                     "nonce_hex": gs_nonce12.hex(),
                     "pack_order": "np.packbits(bitorder=big)",
                 },
-                "ebs": {
+                "SSM": {
                     "lambda1": float(workflow.lambda1),
                     "lambda2": float(workflow.lambda2),
                     "zt_seed": int(getattr(args, "zt_seed", 12345)),
                 },
-                "ssc": {
+                "ssp": {
                     "d_sens": int(stats["d_sens"].item()),
-                    "ssc_cache": str(ssc_cache_path),
+                    "ssp_cache": str(ssp_cache_path),
                 },
-                "sps": {
-                    "T_r": int(sps_cfg.T_r),
+                "ARR": {
+                    "T_r": int(ARR_cfg.T_r),
                     "repair_only": True,
                 },
             },
@@ -1408,25 +1346,25 @@ def main():
             grid_name = f"grid_{base}.png"
             grid_path = os.path.join(outdir, grid_name)
 
-            # Step 2: EBS (generate all zT once so we don't repeat the same chunk when micro-batching)
-            zT_all = workflow.ebs_sample(W=W, K=K, wm_cfg=wm_cfg).detach()  # (n,4,H,W)
+            # Step 2: SSM (generate all zT once so we don't repeat the same chunk when micro-batching)
+            zT_all = workflow.SSM_sample(W=W, K=K, wm_cfg=wm_cfg).detach()  # (n,4,H,W)
 
-            # Optionally save EBS zT (pre-SPS) for direct decoding
+            # Optionally save SSM zT (pre-ARR) for direct decoding
             zT_all_cpu = None
             zT_ref_cpu = None
-            if bool(args.save_zt) and args.save_zt_mode in ['ebs', 'both', 'refined']:
+            if bool(args.save_zt) and args.save_zt_mode in ['SSM', 'both', 'refined']:
                 # Keep a CPU copy for saving/decoding; does not affect generation.
                 zT_all_cpu = zT_all.detach().to('cpu')
                 if bool(args.save_zt_fp16):
                     zT_all_cpu = zT_all_cpu.to(torch.float16)
             if bool(args.save_zt) and args.save_zt_mode in ['refined', 'both']:
-                # We'll fill this during micro-batching (refined zT after SPS+repair).
+                # We'll fill this during micro-batching (refined zT after ARR+repair).
                 # Store on CPU to avoid extra VRAM.
                 zT_ref_cpu = torch.empty_like(zT_all_cpu if zT_all_cpu is not None else zT_all.detach().to('cpu'))
                 if bool(args.save_zt_fp16):
                     zT_ref_cpu = zT_ref_cpu.to(torch.float16)
 
-            # Micro-batch to avoid OOM during SPS (backprop through UNet is the big memory hog)
+            # Micro-batch to avoid OOM during ARR (backprop through UNet is the big memory hog)
             gen_bs = int(args.gen_bs) if int(args.gen_bs) > 0 else n
             gen_bs = min(gen_bs, n)
 
@@ -1436,14 +1374,14 @@ def main():
                 mb = min(gen_bs, n - start)
                 zT = zT_all[start:start + mb].detach().requires_grad_(True)
 
-                # Step 3: SPS refine (optional)
-                if sps_cfg.T_r > 0:
-                    zT_refined = workflow.sps_refine(zT, prompt=prompt, W=W, K=K, wm_cfg=wm_cfg, sps_cfg=sps_cfg)
+                # Step 3: ARR refine (optional)
+                if ARR_cfg.T_r > 0:
+                    zT_refined = workflow.ARR_refine(zT, prompt=prompt, W=W, K=K, wm_cfg=wm_cfg, ARR_cfg=ARR_cfg)
                 else:
                     zT_refined = zT
 
 
-                # Save refined zT (after SPS+repair) for direct decoding
+                # Save refined zT (after ARR+repair) for direct decoding
                 if zT_ref_cpu is not None:
                     zT_ref_cpu[start:start + mb] = zT_refined.detach().to('cpu').to(zT_ref_cpu.dtype)
 
@@ -1485,7 +1423,7 @@ def main():
                     'latent_shape': (int(n), int(4), int(H_lat), int(W_lat)),
                     'lambda1': float(workflow.lambda1),
                     'lambda2': float(workflow.lambda2),
-                    'sps': {'T_r': int(sps_cfg.T_r), 'eta': float(sps_cfg.eta), 'mini_steps': int(sps_cfg.mini_steps)},
+                    'ARR': {'T_r': int(ARR_cfg.T_r), 'eta': float(ARR_cfg.eta), 'mini_steps': int(ARR_cfg.mini_steps)},
                     'gen': {'steps': int(args.steps), 'cfg': float(args.cfg), 'height': int(args.height), 'width': int(args.width)},
                     'gs': {
                         'seed': int(args.gs_seed),
@@ -1496,14 +1434,14 @@ def main():
                         'nonce_hex': (gs_nonce12.hex()),
                         'pack_order': 'np.packbits_msb',                },
                 }
-                # Optional: also save the EBS components for debugging/analysis
-                if args.save_zt_mode in ['ebs', 'both'] and getattr(workflow, '_last_z_wm', None) is not None:
+                # Optional: also save the SSM components for debugging/analysis
+                if args.save_zt_mode in ['SSM', 'both'] and getattr(workflow, '_last_z_wm', None) is not None:
                     save_obj['z_wm'] = workflow._last_z_wm.detach().to('cpu').to(zT_all_cpu.dtype if zT_all_cpu is not None else torch.float32)
-                if args.save_zt_mode in ['ebs', 'both'] and getattr(workflow, '_last_z_free', None) is not None:
-                    save_obj['z_free'] = workflow._last_z_free.detach().to('cpu').to(zT_all_cpu.dtype if zT_all_cpu is not None else torch.float32)
+                if args.save_zt_mode in ['SSM', 'both'] and getattr(workflow, '_last_z_sens', None) is not None:
+                    save_obj['z_sens'] = workflow._last_z_sens.detach().to('cpu').to(zT_all_cpu.dtype if zT_all_cpu is not None else torch.float32)
 
-                if args.save_zt_mode in ['ebs', 'both'] and zT_all_cpu is not None:
-                    save_obj['zT_ebs'] = zT_all_cpu
+                if args.save_zt_mode in ['SSM', 'both'] and zT_all_cpu is not None:
+                    save_obj['zT_SSM'] = zT_all_cpu
                 if args.save_zt_mode in ['refined', 'both'] and zT_ref_cpu is not None:
                     save_obj['zT_refined'] = zT_ref_cpu
                 zt_name = f"zT_{base}.pt"

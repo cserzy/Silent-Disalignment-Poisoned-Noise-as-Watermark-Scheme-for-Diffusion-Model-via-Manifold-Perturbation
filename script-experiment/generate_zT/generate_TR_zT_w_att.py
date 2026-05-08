@@ -1,28 +1,4 @@
 # -*- coding: utf-8 -*-
-"""mitigate_treering_sensFFTmix_repairOnly_saveZTbank.py
-
-What this script does (TR only):
-  1) SSC (unchanged): estimate B_sens from calibration prompts (mini-sampling + CLIP hinge grads).
-  2) EBS (unchanged): build zT by FFT-mixing (lam1 * FFT(z_wm) + (1-lam1) * FFT(z_sens)).
-  3) SPS (CHANGED): **remove gradient update**, keep **one-time Tree-Ring repair** on zT.
-  4) Save a zT bank: a single pt file containing `zT_bank` with shape [M,4,64,64] (default M=16).
-
-Design choices for this configuration:
-  - Seeds are incremental: seed_i = seed_base + i, i=0..M-1 (fully reproducible).
-  - zT generation is independent of prompts (prompts are only used by SSC calibration).
-  - Final zT corresponds to the repaired latent after SPS.
-
-Example:
-CUDA_VISIBLE_DEVICES=0 python mitigate_treering_sensFFTmix_repairOnly_saveZTbank.py \
-  --model_id /home/yancy/work/dm_backdoor_latent_space/checkpoints/sd1-5-diffusers \
-  --prompts  /home/yancy/work/dm_backdoor_latent_space/prompts/prompts_in_train_v3.anchored-kuan-breast-50.txt \
-  --outdir   /home/yancy/work/dm_backdoor_latent_space/logs/vis_sd15_TR_bank_lam0.9_seed12345_2026-01-19 \
-  --height 512 --width 512 \
-  --lam1 0.9 --seed 12345 \
-  --ssc_N_cal 12 --ssc_mini_steps 6 \
-  --tr_w_seed 12345 --tr_w_pattern ring --tr_w_mask_shape circle --tr_w_radius 9 --tr_w_channel -1 --tr_w_injection complex
-"""
-
 from __future__ import annotations
 
 from math import sqrt
@@ -136,7 +112,7 @@ def _sanitize_filename(s: str, max_len: int = 120) -> str:
 
 
 # -----------------------------
-# Diffusion sampler (for SSC mini-sampling)
+# Diffusion sampler (for ssp mini-sampling)
 # -----------------------------
 
 
@@ -217,7 +193,7 @@ class DiffusionLatentSampler:
 
 
 # -----------------------------
-# Surrogate: CLIP hinge loss (SSC only)
+# Surrogate: CLIP hinge loss (ssp only)
 # -----------------------------
 
 
@@ -394,12 +370,12 @@ class FrequencyMaskFamily:
 
 
 # -----------------------------
-# Workflow: SSC + EBS + SPS (SPS changed)
+# Workflow: ssp + SSM + ARR (ARR changed)
 # -----------------------------
 
 
 @dataclass
-class SSCConfig:
+class sspConfig:
     N_cal: int = 12
     d_sens_max: int = 64
     energy_ratio: float = 0.90
@@ -409,8 +385,8 @@ class SSCConfig:
 
 
 @dataclass
-class SPSConfig:
-    # Retained for interface compatibility; SPS now performs a single repair step.
+class ARRConfig:
+    # Retained for interface compatibility; ARR now performs a single repair step.
     T_r: int = 1
 
 
@@ -429,19 +405,19 @@ class AlignPreserveNaW_New:
         self.D = latent_shape[1] * latent_shape[2] * latent_shape[3]
         self.B_sens: Optional[torch.Tensor] = None
 
-    def run_ssc(self, prompts: List[str], ssc_cfg: SSCConfig, negative_prompt: str = "") -> Dict[str, torch.Tensor]:
-        assert len(prompts) >= ssc_cfg.N_cal
+    def run_ssp(self, prompts: List[str], ssp_cfg: sspConfig, negative_prompt: str = "") -> Dict[str, torch.Tensor]:
+        assert len(prompts) >= ssp_cfg.N_cal
         grads: List[torch.Tensor] = []
         C, H, W = self.latent_shape[1], self.latent_shape[2], self.latent_shape[3]
 
-        for i in range(ssc_cfg.N_cal):
+        for i in range(ssp_cfg.N_cal):
             prompt = prompts[i]
             zT = torch.randn((1, C, H, W), device=self.device, dtype=torch.float32, requires_grad=True)
             cfg = DiffusionSamplerConfig(
-                num_steps=ssc_cfg.mini_steps,
-                guidance_scale=ssc_cfg.guidance_scale,
-                eta=ssc_cfg.eta_ddim,
-                mini_steps=ssc_cfg.mini_steps,
+                num_steps=ssp_cfg.mini_steps,
+                guidance_scale=ssp_cfg.guidance_scale,
+                eta=ssp_cfg.eta_ddim,
+                mini_steps=ssp_cfg.mini_steps,
             )
             x_tilde = self.sampler.mini_sample_image(zT, prompt, cfg, negative_prompt=negative_prompt)
             loss = self.surrogate(x_tilde, prompt)
@@ -452,9 +428,9 @@ class AlignPreserveNaW_New:
                 torch.cuda.empty_cache()
 
         G = torch.cat(grads, dim=0)
-        k_try = min(ssc_cfg.d_sens_max, min(G.shape) - 1)
+        k_try = min(ssp_cfg.d_sens_max, min(G.shape) - 1)
         _, S, Vt = randomized_svd_topk(G, k=k_try)
-        d_sens = explained_energy_to_rank(S, ratio=float(ssc_cfg.energy_ratio))
+        d_sens = explained_energy_to_rank(S, ratio=float(ssp_cfg.energy_ratio))
         del G
         gc.collect()
 
@@ -465,9 +441,9 @@ class AlignPreserveNaW_New:
         self.B_sens = B_sens
         return {"B_sens": B_sens, "d_sens": torch.tensor([d_sens], device=self.device)}
 
-    def ebs_sample(self, wm_family: FrequencyMaskFamily, lam1: float, seed_prompt: int, K: bytes) -> torch.Tensor:
-        """EBS unchanged: FFT-mix between z_wm and projected z_sens."""
-        assert self.B_sens is not None, "Call run_ssc first."
+    def SSM_sample(self, wm_family: FrequencyMaskFamily, lam1: float, seed_prompt: int, K: bytes) -> torch.Tensor:
+        """SSM unchanged: FFT-mix between z_wm and projected z_sens."""
+        assert self.B_sens is not None, "Call run_ssp first."
         B, C, H, W = self.latent_shape
         lam1 = float(lam1)
         lam2 = sqrt(1.0 - lam1*lam1)
@@ -500,9 +476,9 @@ class AlignPreserveNaW_New:
     def repair_wm_on_zt(self, wm_family: FrequencyMaskFamily, zT: torch.Tensor, K: bytes) -> torch.Tensor:
         return wm_family.inject(zT, K=K)
 
-    def sps_refine(self, wm_family: FrequencyMaskFamily, zT: torch.Tensor, sps_cfg: SPSConfig, K: bytes) -> torch.Tensor:
-        """SPS changed: no gradient update, only one-time TR repair."""
-        _ = sps_cfg  # keep signature stable
+    def ARR_refine(self, wm_family: FrequencyMaskFamily, zT: torch.Tensor, ARR_cfg: ARRConfig, K: bytes) -> torch.Tensor:
+        """ARR changed: no gradient update, only one-time TR repair."""
+        _ = ARR_cfg  # keep signature stable
         with torch.no_grad():
             return self.repair_wm_on_zt(wm_family, zT, K=K).detach()
 
@@ -513,10 +489,10 @@ class AlignPreserveNaW_New:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="TR SSC+EBS (unchanged) + SPS(repair-only) => save zT bank")
+    parser = argparse.ArgumentParser(description="TR ssp+SSM (unchanged) + ARR(repair-only) => save zT bank")
 
     # IO
-    parser.add_argument("--prompts", type=str, required=True, help="Used for SSC calibration only")
+    parser.add_argument("--prompts", type=str, required=True, help="Used for ssp calibration only")
     parser.add_argument("--outdir", type=str, required=True)
     parser.add_argument("--save_zt", type=int, default=1, help="If 1, save bank pt (always).")
     parser.add_argument("--bank_num", type=int, default=16, help="Number of zT to generate (default 16)")
@@ -529,18 +505,18 @@ def main():
     parser.add_argument("--width", type=int, default=512)
     parser.add_argument("--negative_prompt", type=str, default="")
 
-    # SSC
-    parser.add_argument("--ssc_N_cal", type=int, default=12)
-    parser.add_argument("--ssc_mini_steps", type=int, default=6)
-    parser.add_argument("--ssc_energy_ratio", type=float, default=0.90)
-    parser.add_argument("--ssc_d_sens_max", type=int, default=64)
+    # ssp
+    parser.add_argument("--ssp_N_cal", type=int, default=12)
+    parser.add_argument("--ssp_mini_steps", type=int, default=6)
+    parser.add_argument("--ssp_energy_ratio", type=float, default=0.90)
+    parser.add_argument("--ssp_d_sens_max", type=int, default=64)
 
-    # EBS mix
+    # SSM mix
     parser.add_argument("--lam1", type=float, default=0.9)
     parser.add_argument("--seed", type=int, default=12345, help="seed_base, actual seed_i = seed + i")
 
-    # SPS parameter retained for logging; SPS is repair-only
-    parser.add_argument("--sps_T_r", type=int, default=1)
+    # ARR parameter retained for logging; ARR is repair-only
+    parser.add_argument("--ARR_T_r", type=int, default=1)
 
     # Tree-Ring params
     parser.add_argument("--tr_w_seed", type=int, default=12345)
@@ -561,14 +537,14 @@ def main():
     _ensure_dir(latents_dir)
 
     prompts_all = _read_prompts_txt(args.prompts)
-    cal = (prompts_all * ((int(args.ssc_N_cal) + len(prompts_all) - 1) // len(prompts_all)))[: int(args.ssc_N_cal)]
+    cal = (prompts_all * ((int(args.ssp_N_cal) + len(prompts_all) - 1) // len(prompts_all)))[: int(args.ssp_N_cal)]
 
     H_lat = args.height // 8
     W_lat = args.width // 8
     latent_shape = (1, 4, H_lat, W_lat)  # IMPORTANT: generate 1 zT each time, then stack to [M,4,H,W]
     D = 4 * H_lat * W_lat
 
-    print("[Init] Loading Stable Diffusion pipeline (for SSC only)...")
+    print("[Init] Loading Stable Diffusion pipeline (for ssp only)...")
     pipe = StableDiffusionPipeline.from_pretrained(
         args.model_id,
         torch_dtype=torch.float32,
@@ -587,27 +563,27 @@ def main():
         device=str(device),
     )
 
-    # --- SSC (unchanged) ---
-    print(f"[SSC] Calibrating with N_cal={int(args.ssc_N_cal)} ...")
-    ssc_cfg = SSCConfig(
-        N_cal=int(args.ssc_N_cal),
-        d_sens_max=int(args.ssc_d_sens_max),
-        energy_ratio=float(args.ssc_energy_ratio),
-        mini_steps=int(args.ssc_mini_steps),
+    # --- ssp (unchanged) ---
+    print(f"[ssp] Calibrating with N_cal={int(args.ssp_N_cal)} ...")
+    ssp_cfg = sspConfig(
+        N_cal=int(args.ssp_N_cal),
+        d_sens_max=int(args.ssp_d_sens_max),
+        energy_ratio=float(args.ssp_energy_ratio),
+        mini_steps=int(args.ssp_mini_steps),
         guidance_scale=7.5,
         eta_ddim=0.0,
     )
-    stats = workflow.run_ssc(cal, ssc_cfg, negative_prompt=args.negative_prompt)
+    stats = workflow.run_ssp(cal, ssp_cfg, negative_prompt=args.negative_prompt)
     d_sens = int(stats["d_sens"].item())
-    print(f"[SSC] d_sens={d_sens}")
+    print(f"[ssp] d_sens={d_sens}")
     torch.save(
         {
             "B_sens": workflow.B_sens.detach().cpu(),
             "d_sens": d_sens,
-            "ssc_cfg": ssc_cfg.__dict__,
-            "note": "SSC basis (sensitive subspace) used to build z_sens = Proj_{B_sens}(z).",
+            "ssp_cfg": ssp_cfg.__dict__,
+            "note": "ssp basis (sensitive subspace) used to build z_sens = Proj_{B_sens}(z).",
         },
-        os.path.join(meta_dir, "ssc_basis.pt"),
+        os.path.join(meta_dir, "ssp_basis.pt"),
     )
 
     # --- Watermark cfg + family ---
@@ -625,8 +601,8 @@ def main():
     wm_family = FrequencyMaskFamily(D=D, wm_cfg=wm_cfg, latent_shape=(4, H_lat, W_lat))
     K = b""  # fixed; with tr_seed_from_key=0 it won't change the patch anyway
 
-    # --- SPS cfg (repair-only) ---
-    sps_cfg = SPSConfig(T_r=int(args.sps_T_r))
+    # --- ARR cfg (repair-only) ---
+    ARR_cfg = ARRConfig(T_r=int(args.ARR_T_r))
 
     # --- Generate zT bank (independent of prompt) ---
     M = int(args.bank_num)
@@ -638,8 +614,8 @@ def main():
     for i in range(M):
         seed_i = seed_base + i
         seeds.append(seed_i)
-        z_pre = workflow.ebs_sample(wm_family=wm_family, lam1=float(args.lam1), seed_prompt=seed_i, K=K)  # (1,4,H,W)
-        z_ref = workflow.sps_refine(wm_family=wm_family, zT=z_pre, sps_cfg=sps_cfg, K=K)  # (1,4,H,W)
+        z_pre = workflow.SSM_sample(wm_family=wm_family, lam1=float(args.lam1), seed_prompt=seed_i, K=K)  # (1,4,H,W)
+        z_ref = workflow.ARR_refine(wm_family=wm_family, zT=z_pre, ARR_cfg=ARR_cfg, K=K)  # (1,4,H,W)
         z_list.append(z_ref[0].detach().cpu().to(torch.float32))
 
         if (i + 1) % 4 == 0 or (i + 1) == M:
@@ -664,8 +640,8 @@ def main():
             "lam1": float(args.lam1),
             "lam2": 1.0 - float(args.lam1),
             "wm_cfg": wm_cfg.__dict__,
-            "ssc_basis_path": os.path.join(meta_dir, "ssc_basis.pt"),
-            "note": "TR zT bank: EBS(unchanged) + SPS(repair-only, 1x). Seeds are incremental.",
+            "ssp_basis_path": os.path.join(meta_dir, "ssp_basis.pt"),
+            "note": "TR zT bank: SSM(unchanged) + ARR(repair-only, 1x). Seeds are incremental.",
         },
         out_pt,
     )
