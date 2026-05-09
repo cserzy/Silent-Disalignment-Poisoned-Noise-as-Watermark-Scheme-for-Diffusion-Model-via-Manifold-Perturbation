@@ -297,9 +297,9 @@ C, H, W = 4, 64, 64
 def bits_bin_to_bytes(bits: str) -> bytes:
     bits = bits.strip()
     if not set(bits) <= {"0","1"}:
-        raise ValueError("二进制密钥/nonce 只能包含 0/1")
+        raise ValueError("Binary key/nonce strings may only contain 0 or 1.")
     if len(bits) % 8 != 0:
-        raise ValueError("二进制串长度必须是 8 的倍数")
+        raise ValueError("Binary strings must have a length that is a multiple of 8.")
     out = bytearray()
     for i in range(0, len(bits), 8):
         out.append(int(bits[i:i+8], 2))
@@ -309,18 +309,18 @@ def parse_key_32bytes(args) -> bytes:
     # Mutually exclusive: --key_ones / --key_hex / --key_bin
     cnt = int(args.key_ones) + (args.key_hex is not None) + (args.key_bin is not None)
     if cnt != 1:
-        raise ValueError("密钥输入需且仅需一种：--key_ones 或 --key_hex 或 --key_bin")
+        raise ValueError("Exactly one key input must be provided: --key_ones, --key_hex, or --key_bin.")
     if args.key_ones:
-        return b"\xff" * 32  # 32 字节全 1（即 256 个比特 1）
+        return b"\xff" * 32  # 32 bytes of all ones, i.e. 256 one-bits.
     if args.key_hex is not None:
         hx = args.key_hex.strip().lower()
         if len(hx) != 64 or any(ch not in "0123456789abcdef" for ch in hx):
-            raise ValueError("key_hex 必须是 64 个十六进制字符（=32字节）")
+            raise ValueError("key_hex must contain exactly 64 hexadecimal characters (32 bytes).")
         return bytes.fromhex(hx)
     if args.key_bin is not None:
         bs = args.key_bin.strip()
         if len(bs) != 256:
-            raise ValueError("key_bin 必须是 256 位 01 串（=32字节）")
+            raise ValueError("key_bin must be a 256-bit 0/1 string (32 bytes).")
         return bits_bin_to_bytes(bs)
     raise AssertionError
 
@@ -331,12 +331,12 @@ def parse_nonce_12bytes(args) -> bytes:
     if args.nonce_hex is not None:
         hx = args.nonce_hex.strip().lower()
         if len(hx) != 24 or any(ch not in "0123456789abcdef" for ch in hx):
-            raise ValueError("nonce_hex 必须是 24 个十六进制字符（=12字节）")
+            raise ValueError("nonce_hex must contain exactly 24 hexadecimal characters (12 bytes).")
         return bytes.fromhex(hx)
     if args.nonce_bin is not None:
         bs = args.nonce_bin.strip()
         if len(bs) != 96:
-            raise ValueError("nonce_bin 必须是 96 位 01 串（=12字节）")
+            raise ValueError("nonce_bin must be a 96-bit 0/1 string (12 bytes).")
         return bits_bin_to_bytes(bs)
     # Fixed nonce for experiment reproducibility; not recommended for production reuse
     return b"GS-fixed-nc!"  # 12 bytes

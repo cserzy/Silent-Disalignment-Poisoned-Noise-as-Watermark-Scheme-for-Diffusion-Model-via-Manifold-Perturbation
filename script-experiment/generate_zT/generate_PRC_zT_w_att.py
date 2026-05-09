@@ -597,23 +597,23 @@ class AlignPreserveNaW:
             self._dbg_boost_once = True
             print("[DBG] prc_posterior_boost =", getattr(self, "prc_posterior_boost", False))
         if bool(getattr(self, "prc_posterior_boost", False)):
-            # hyperparams (给默认值，不用你额外改 CLI 也能跑)
-            var  = float(getattr(self, "prc_boost_var", 1.5))   # 和你检测脚本 var 对齐的常用默认
-            tau  = float(getattr(self, "prc_boost_tau", 0.25))  # “低置信”阈值
-            beta = float(getattr(self, "prc_boost_beta", 0.10)) # 放大强度（建议 0.05~0.15）
+            # Posterior-boost hyperparameters with conservative defaults.
+            var  = float(getattr(self, "prc_boost_var", 1.5))   # Matches the common detector-side variance.
+            tau  = float(getattr(self, "prc_boost_tau", 0.25))  # Low-confidence threshold.
+            beta = float(getattr(self, "prc_boost_beta", 0.10)) # Magnitude boost strength; typically 0.05-0.15.
 
-            # 记录每个样本 boost 前的 std，避免整体能量漂移
+            # Preserve the per-sample standard deviation to avoid energy drift.
             std0 = z_new.std(dim=1, keepdim=True, unbiased=False).detach()
 
-            # 每个样本单独算 posteriors（pg.recover_posteriors 典型是 1D 输入）
+            # Recover posteriors per sample because pg.recover_posteriors typically expects 1D input.
             z_new_list = []
             for b in range(B):
                 zb = z_new[b].detach().to(dtype=torch.float64).cpu()  # (D,)
-                post = pg.recover_posteriors(zb, variances=var)        # numpy/torch 都可能
+                post = pg.recover_posteriors(zb, variances=var)
                 post = torch.as_tensor(post, dtype=z_new.dtype, device=z_new.device)  # (D,)
 
-                # 对 |post| 小的维度轻微放大 |z|（不改符号）
-                # w in [1, 1+beta]
+                # Slightly amplify |z| on low-confidence dimensions without flipping signs.
+                # w stays in [1, 1+beta].
                 denom = tau if tau > 1e-6 else 1e-6
                 w = 1.0 + beta * torch.clamp((tau - post.abs()) / denom, min=0.0, max=1.0)  # (D,)
 
@@ -622,13 +622,13 @@ class AlignPreserveNaW:
 
             z_new = torch.stack(z_new_list, dim=0)
 
-            # 把 std 拉回 boost 前，避免方差漂移影响采样分布
+            # Restore the original standard deviation after boosting.
             std1 = z_new.std(dim=1, keepdim=True, unbiased=False)
             z_new = z_new * (std0 / (std1 + 1e-8))
         if getattr(self, "_dbg_latent_detect_cnt", 0) < 3:
             self._dbg_latent_detect_cnt = getattr(self, "_dbg_latent_detect_cnt", 0) + 1
             zb = z_new[0].detach().to(torch.float64).cpu()     # (D,)
-            post = pg.recover_posteriors(zb, variances=float(1.5))  # var 用你检测脚本一致的
+            post = pg.recover_posteriors(zb, variances=float(1.5))  # Uses the same variance as the detector-side setup.
             post = torch.as_tensor(post)
             det = prc_lib.Detect(self.prc.decoding_key, post, false_positive_rate=1e-5)
             print(f"[DBG] latent-side Detect={det}  mean|post|={post.abs().mean():.4f}  frac(|post|<0.05)={(post.abs()<0.05).float().mean():.3f}")
@@ -870,7 +870,7 @@ def cli_main():
                 gen_cfg=full_cfg,
             )
 
-            # 只保存 refined 后的 zT
+            # Save only the refined zT.
             z_list.append(zT_refined[0].detach().cpu())
             idx += 1
 

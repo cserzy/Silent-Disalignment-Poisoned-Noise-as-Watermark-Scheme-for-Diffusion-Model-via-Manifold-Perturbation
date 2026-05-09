@@ -156,7 +156,7 @@ def Decode(decoding_key, posteriors, print_progress=False, max_bp_iter=None):
     posteriors = (1 - 2 * noise_rate) * (1 - 2 * np.array(one_time_pad, dtype=float)) * posteriors.numpy(force=True)
     channel_probs = (1 - np.abs(posteriors)) / 2
     x_recovered = (1 - np.sign(posteriors)) // 2
-    #下面函数自己加的
+    # Local helper for debugging the parity-check syndrome weight.
     def _syndrome_weight(H, x_bits):
         s = (H @ x_bits) % 2
         return int(np.sum(s))
@@ -165,9 +165,9 @@ def Decode(decoding_key, posteriors, print_progress=False, max_bp_iter=None):
         print("Running belief propagation...")
     bpd = bp_decoder(parity_check_matrix, channel_probs=channel_probs, max_iter=max_bp_iter, bp_method="product_sum")
     x_decoded = bpd.decode(x_recovered)
-    #自己加的哦
-    x_decoded = np.asarray(x_decoded, dtype=np.int64)   # <<< add
-    #这里是调试哦
+    # Cast explicitly to keep downstream linear algebra stable.
+    x_decoded = np.asarray(x_decoded, dtype=np.int64)
+    # Extra decode diagnostics.
     x_dec = x_decoded.astype(np.int64)
     sw_dec = _syndrome_weight(parity_check_matrix, x_dec)
     print(f"[DBG][DECODE] syndrome_decoded={sw_dec}")
@@ -192,10 +192,10 @@ def Decode(decoding_key, posteriors, print_progress=False, max_bp_iter=None):
     print("[DBG][DECODE] ordered_x_decoded dtype =", np.asarray(ordered_x_decoded).dtype)
     print("[DBG][DECODE] ordered_generator_matrix type =", type(ordered_generator_matrix), "dtype =", getattr(ordered_generator_matrix, "dtype", None))
 
-    #这两行也是自己加的
+    # Convert the right-hand side explicitly before solving.
     rhs = GF(np.asarray(ordered_x_decoded[top_invertible_rows], dtype=np.int64))
     recovered_string = np.linalg.solve(ordered_generator_matrix[top_invertible_rows], rhs)
-    #这也是调试哦
+    # Report test-bit agreement for debugging.
     tb = np.array(test_bits, dtype=np.int64)
     got = np.array(recovered_string[:len(tb)], dtype=np.int64)
     print(f"[DBG][DECODE] test_bits_acc={(got==tb).mean():.3f} mism={int(np.sum(got!=tb))}")

@@ -76,8 +76,8 @@ def main():
     ap.add_argument("--ssc_guidance", type=float, default=7.5)
     ap.add_argument("--reuse_ssc", type=int, default=1)
 
-    # 实际需要
-    ap.add_argument("--cluster_pt", type=str, required=True, help="official T2S cluster pt（dict 含 latents）")
+    # Required arguments for the delssc variant.
+    ap.add_argument("--cluster_pt", type=str, required=True, help="Official T2S cluster pt containing the latent dict.")
     ap.add_argument("--outdir", type=str, required=True)
 
     ap.add_argument("--K", type=int, default=16)
@@ -90,7 +90,7 @@ def main():
     ap.add_argument("--t2s_tau", type=float, default=0.674)
     ap.add_argument("--key_channel_idx", type=int, default=0)
 
-    # 兼容旧命令（delssc 不使用）
+    # Legacy CLI compatibility; unused by the delssc path.
     ap.add_argument("--dtype", type=str, default="fp16", choices=["fp16", "bf16", "fp32"])
     ap.add_argument("--xformers", action="store_true")
     ap.add_argument("--attn_slicing", action="store_true")

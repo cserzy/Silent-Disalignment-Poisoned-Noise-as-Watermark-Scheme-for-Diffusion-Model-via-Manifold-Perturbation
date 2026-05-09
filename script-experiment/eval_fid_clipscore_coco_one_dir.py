@@ -142,7 +142,7 @@ def get_inception(device: str, dtype: torch.dtype):
     weights = Inception_V3_Weights.DEFAULT
     preprocess = weights.transforms()
 
-    # ✅ 不要显式 aux_logits=False；预训练 weights 期望 aux_logits=True
+    # Keep the default aux_logits behavior because the pretrained weights expect it.
     model = inception_v3(weights=weights, transform_input=False)
     model.fc = torch.nn.Identity()  # output 2048
     model.eval().to(device=device, dtype=dtype)
@@ -170,7 +170,7 @@ def extract_inception_features(
         tens = torch.stack([preprocess(im) for im in imgs], dim=0).to(device=device, dtype=torch_dtype)
 
         f = model(tens)  # (B,2048)
-        if hasattr(f, "logits"):  # 兼容 InceptionOutputs
+        if hasattr(f, "logits"):  # Compatible with InceptionOutputs.
             f = f.logits
         f = f.detach().float().cpu().numpy()
         feats.append(f)

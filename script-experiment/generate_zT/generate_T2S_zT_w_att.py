@@ -173,7 +173,7 @@ def main():
     ap = argparse.ArgumentParser()
 
     ap.add_argument("--model_id", type=str, required=True)
-    ap.add_argument("--prompts", type=str, required=True, help="用于 ssp 校准的 prompts txt（取前 cal_N 条）")
+    ap.add_argument("--prompts", type=str, required=True, help="Prompt txt used for SSP calibration; the first cal_N prompts are used.")
     ap.add_argument("--cluster_pt", type=str, required=True, help="official T2S cluster pt")
     ap.add_argument("--outdir", type=str, required=True)
 

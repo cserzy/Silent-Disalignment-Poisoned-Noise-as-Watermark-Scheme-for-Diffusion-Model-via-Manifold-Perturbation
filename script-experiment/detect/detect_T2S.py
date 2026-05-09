@@ -1,5 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""
+Aligned dual-mode T2SMark detector (NEW MAINLINE):
+  (A) zT16 path: load [16,4,64,64] z_T tensor -> decode
+  (B) image path: image -> inversion -> decode
+
+Key changes vs old detect_t2s_dual.py:
+  - NO reverse_bits, NO int_to_bits ambiguity.
+  - Always use official cluster-style bits stored in cluster_meta_pt (torch .pt dict).
+  - combo_id is parsed from filename Pxx_yy.png, yy in [0..15].
+  - Keeps oracle session_key decode for debugging (acc_msg_oracle).
+
+Prereq:
+  export PYTHONPATH=$PYTHONPATH:/home/yancy/work/dm_backdoor_latent_space/third_party/T2SMark_official
+"""
+
 import argparse
 import glob
 import json
@@ -95,38 +110,72 @@ def load_cluster_meta(cluster_meta_pt: str, device: torch.device) -> Dict[str, A
     Load meta dict. Supports:
       - official cluster pt: {'master_keys','keys','msgs','settings','latents',...}
       - custom meta pt: support alternate key naming conventions.
+
+    Compatibility mode:
+      If cluster_meta_pt does NOT contain master/session/msg bits but contains 'cluster_pt',
+      we will load the official cluster pt pointed by pack['cluster_pt'] to recover
+      {'master_keys','keys','msgs','settings'}.
+
     Returns normalized:
-      master_keys: [16, key_len] int32
-      session_keys: [16, key_len] int32
-      msgs: [16, msg_len] int32
+      master_keys: [K, key_len] int32
+      session_keys: [K, key_len] int32
+      msgs: [K, msg_len] int32
       settings: dict
       tau: float
       key_channel_idx: int
       key_length, msg_length
+      K
     """
     pack = torch.load(cluster_meta_pt, map_location="cpu")
     if not isinstance(pack, dict):
         raise TypeError(f"cluster_meta_pt must be a dict .pt, got: {type(pack)}")
 
-    settings = pack.get("settings", {}) if isinstance(pack.get("settings", {}), dict) else {}
+    settings = pack.get("settings", {})
+    if not isinstance(settings, dict):
+        settings = {}
 
-    # Try common keys
+    def _load_official_cluster(cluster_pt: str) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict[str, Any]]:
+        cluster_pack = torch.load(cluster_pt, map_location="cpu")
+        if not isinstance(cluster_pack, dict):
+            raise TypeError(f"cluster_pt must be a dict .pt, got: {type(cluster_pack)}")
+        if not ("master_keys" in cluster_pack and "keys" in cluster_pack and "msgs" in cluster_pack):
+            raise KeyError(f"cluster_pt missing required keys. got={list(cluster_pack.keys())}")
+        settings_off = cluster_pack.get("settings", {})
+        if not isinstance(settings_off, dict):
+            settings_off = {}
+        mk_ = _to_bits_tensor(cluster_pack["master_keys"], device)
+        sk_ = _to_bits_tensor(cluster_pack["keys"], device)
+        mg_ = _to_bits_tensor(cluster_pack["msgs"], device)
+        return mk_, sk_, mg_, settings_off
+
+    # ---- 1) primary path: standard keys present ----
     if "master_keys" in pack and "keys" in pack and "msgs" in pack:
         master_keys = _to_bits_tensor(pack["master_keys"], device)
         session_keys = _to_bits_tensor(pack["keys"], device)
         msgs = _to_bits_tensor(pack["msgs"], device)
     else:
-        # tolerate alternate naming
-        mk = pack.get("master_key_bits", None) or pack.get("master_keys_bits", None) or pack.get("master_key", None)
-        sk = pack.get("session_key_bits", None) or pack.get("session_keys", None) or pack.get("keys", None)
-        mg = pack.get("msg_bits", None) or pack.get("msgs_bits", None) or pack.get("msgs", None)
-        if mk is None or sk is None or mg is None:
-            raise KeyError(f"cluster_meta_pt missing keys. got={list(pack.keys())}")
-        master_keys = _to_bits_tensor(mk, device)
-        session_keys = _to_bits_tensor(sk, device)
-        msgs = _to_bits_tensor(mg, device)
+        # ---- 2) tolerate alternate naming ----
+        mk = pack.get("master_key_bits") or pack.get("master_keys_bits") or pack.get("master_key")
+        sk = pack.get("session_key_bits") or pack.get("session_keys") or pack.get("keys")
+        mg = pack.get("msg_bits") or pack.get("msgs_bits") or pack.get("msgs")
 
-    # Ensure 2D [K,L]
+        if mk is not None and sk is not None and mg is not None:
+            master_keys = _to_bits_tensor(mk, device)
+            session_keys = _to_bits_tensor(sk, device)
+            msgs = _to_bits_tensor(mg, device)
+        else:
+            # ---- 3) compatibility: ablation meta only stores 'cluster_pt' ----
+            cluster_pt = pack.get("cluster_pt", None)
+            if cluster_pt is None:
+                raise KeyError(f"cluster_meta_pt missing keys. got={list(pack.keys())}")
+            cluster_pt = str(cluster_pt)
+            if not os.path.isfile(cluster_pt):
+                raise FileNotFoundError(f"cluster_pt not found: {cluster_pt}")
+            master_keys, session_keys, msgs, settings_off = _load_official_cluster(cluster_pt)
+            # meta/settings overrides official settings
+            settings = {**settings_off, **settings}
+
+    # ---- Ensure 2D [K, L] ----
     if master_keys.ndim == 1:
         master_keys = master_keys.unsqueeze(0)
     if session_keys.ndim == 1:
@@ -134,21 +183,32 @@ def load_cluster_meta(cluster_meta_pt: str, device: torch.device) -> Dict[str, A
     if msgs.ndim == 1:
         msgs = msgs.unsqueeze(0)
 
-    tau = float(settings.get("tau", pack.get("t2s_tau", 0.674)))
-    key_channel_idx = int(settings.get("key_channel_idx", pack.get("key_channel_idx", 0)))
+    # ---- Hyper-params ----
+    tau = float(settings.get("tau", pack.get("tau", pack.get("t2s_tau", 0.674))))
+
+    cluster_settings = pack.get("cluster_settings", {})
+    if not isinstance(cluster_settings, dict):
+        cluster_settings = {}
+    key_channel_idx = int(
+        settings.get(
+            "key_channel_idx",
+            pack.get("key_channel_idx", cluster_settings.get("key_channel_idx", 0)),
+        )
+    )
 
     key_length = int(settings.get("key_length", master_keys.shape[-1]))
     msg_length = int(settings.get("msg_length", msgs.shape[-1]))
 
-    # Sanity
-    if master_keys.shape[0] < 1 or session_keys.shape[0] < 1 or msgs.shape[0] < 1:
+    # ---- Sanity ----
+    if master_keys.numel() == 0 or session_keys.numel() == 0 or msgs.numel() == 0:
         raise ValueError("Empty keys/msg in cluster_meta_pt")
+
     if master_keys.shape[0] != session_keys.shape[0]:
-        # allow master_keys repeated but still should match K
         if master_keys.shape[0] == 1:
             master_keys = master_keys.repeat(session_keys.shape[0], 1)
         else:
             raise ValueError(f"K mismatch: master_keys {master_keys.shape}, session_keys {session_keys.shape}")
+
     if msgs.shape[0] != session_keys.shape[0]:
         if msgs.shape[0] == 1:
             msgs = msgs.repeat(session_keys.shape[0], 1)
