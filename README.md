@@ -91,6 +91,8 @@ When adapting old internal scripts, replace old `prompts/...txt` paths with thes
 
 All commands below are examples. Replace `/path/to/...` with your local checkpoint paths as needed.
 
+In this public release, the `w_att` export scripts use the released repair-only variants of the latent construction pipeline.
+
 ### 1.1 GS
 
 ```bash
@@ -100,12 +102,12 @@ CUDA_VISIBLE_DEVICES=0 python script-experiment/generate_zT/generate_GS_zT_w_att
   --outdir tmp_gs \
   --margin 0.3 \
   --steps 30 --cfg 7.5 --height 512 --width 512 \
-  --ssc_d_wm 256 \
+  --ssp_d_wm 256 \
   --gs_seed 12345 \
   --gs_key_hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
   --gs_nonce_zero \
   --gs_ch 4 --gs_hw 4 \
-  --lambda1 0.88 \
+  --lambda1 0.90 \
   --export_zt_only \
   --n_zt 16 --zt_seed 12345 \
   --export_latents_dir latents_experiment \
@@ -122,9 +124,10 @@ CUDA_VISIBLE_DEVICES=0 python script-experiment/generate_zT/generate_T2S_zT_w_at
   --outdir tmp_t2s \
   --K 16 \
   --seed 12345 \
-  --lam1 0.88 \
-  --ssc_cal_N 12 --ssc_energy_ratio 0.90 --ssc_mini_steps 6 \
+  --lam1 0.90 \
+  --ssp_cal_N 12 --ssp_energy_ratio 0.90 --ssp_mini_steps 6 \
   --t2s_tau 0.674 \
+  --key_channel_idx 0 \
   --export_latents_dir latents_experiment \
   --out_pt_name generate_T2S_w_att.pt \
   --out_pre_pt_name generate_T2S_w_att_pre.pt \
@@ -143,12 +146,12 @@ CUDA_VISIBLE_DEVICES=0 python script-experiment/generate_zT/generate_PRC_zT_w_at
   --steps 50 --cfg 7.5 --height 512 --width 512 \
   --rows 4 --cols 4 --gen_bs 4 \
   --seed 12345 \
-  --ssc_N_cal 12 --ssc_energy_ratio 0.900 --ssc_mini_steps 6 \
-  --ssc_d_sens_max 256 --ssc_d_wm 256 \
-  --reuse_ssc 1 \
+  --ssp_N_cal 12 --ssp_energy_ratio 0.900 --ssp_mini_steps 12 \
+  --ssp_d_sens_max 64 --ssp_d_wm 256 \
+  --reuse_ssp 1 \
   --prc_message_length <message_length> --prc_error_prob 0.01 \
   --master_key <your_prc_master_key> \
-  --lam1 0.89 \
+  --lam1 0.87 \
   --save_zT 0 \
   --export_zT16_only 1 \
   --export_latents_dir latents_experiment \
@@ -159,6 +162,7 @@ CUDA_VISIBLE_DEVICES=0 python script-experiment/generate_zT/generate_PRC_zT_w_at
 Note:
 
 - PRC detection needs the watermark metadata generated during this stage
+- T2S export stores the repair-only support statistics in its metadata file for downstream decoding
 
 ### 1.4 TR
 
@@ -170,7 +174,7 @@ CUDA_VISIBLE_DEVICES=0 python script-experiment/generate_zT/generate_TR_zT_w_att
   --out_pt latents_experiment/generate_TR_w_att.pt \
   --height 512 --width 512 \
   --lam1 0.88 --seed 12345 \
-  --ssc_N_cal 12 --ssc_mini_steps 6 \
+  --ssp_N_cal 12 --ssp_mini_steps 6 --ssp_energy_ratio 0.90 \
   --tr_w_seed 12345 \
   --tr_w_pattern ring \
   --tr_w_mask_shape circle \
