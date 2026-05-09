@@ -21,9 +21,9 @@ PNaW follows the same high-level workflow described in the paper:
 
 This repository currently exposes a compact public subset of our experiment assets:
 
-- [latents_experiment](/home/yancy/work/dm_backdoor_latent_space/github_upload_tmp/Silent-Disalignment-Hijacking-Noise-as-Watermark-Schemes-of-Diffusion-Model/latents_experiment)
-- [prompt](/home/yancy/work/dm_backdoor_latent_space/github_upload_tmp/Silent-Disalignment-Hijacking-Noise-as-Watermark-Schemes-of-Diffusion-Model/prompt)
-- [script-experiment](/home/yancy/work/dm_backdoor_latent_space/github_upload_tmp/Silent-Disalignment-Hijacking-Noise-as-Watermark-Schemes-of-Diffusion-Model/script-experiment)
+- [`latents_experiment/`](latents_experiment/)
+- [`prompt/`](prompt/)
+- [`script-experiment/`](script-experiment/)
 
 ## Repository Layout
 
@@ -43,7 +43,7 @@ These scripts are built around the official watermark implementations and common
 
 - Diffusers-based Stable Diffusion checkpoints such as SD v1.4, SD v1.5, and SD v2.1
 - AltDiffusion for the AltDiffusion examples
-- the bundled [third_party/T2SMark](/home/yancy/work/dm_backdoor_latent_space/github_upload_tmp/Silent-Disalignment-Hijacking-Noise-as-Watermark-Schemes-of-Diffusion-Model/third_party/T2SMark) dependency snapshot
+- the bundled [`third_party/T2SMark/`](third_party/T2SMark/) dependency snapshot
 - the helper modules already released in this repository, such as `prc.py` and `pseudogaussians.py`
 
 Some watermark components are vendored directly into this repository, while others are integrated into our released attack and detection scripts.
@@ -121,8 +121,8 @@ CUDA_VISIBLE_DEVICES=0 python script-experiment/generate_zT/generate_PRC_zT_w_at
   --ssc_N_cal 12 --ssc_energy_ratio 0.900 --ssc_mini_steps 6 \
   --ssc_d_sens_max 256 --ssc_d_wm 256 \
   --reuse_ssc 1 \
-  --prc_message_length 8 --prc_error_prob 0.01 \
-  --master_key prc_key_sd14_0124 \
+  --prc_message_length <message_length> --prc_error_prob 0.01 \
+  --master_key <your_prc_master_key> \
   --lam1 0.89 \
   --save_zT 0 \
   --export_zT16_only 1 \
@@ -158,7 +158,7 @@ CUDA_VISIBLE_DEVICES=0 python script-experiment/generate_zT/generate_TR_zT_w_att
 
 ### 2.1 Stable Diffusion v1.4 / v1.5 / v2.1
 
-Use [gen_from_zT_bank_multi_models-1_19.py](/home/yancy/work/dm_backdoor_latent_space/github_upload_tmp/Silent-Disalignment-Hijacking-Noise-as-Watermark-Schemes-of-Diffusion-Model/script-experiment/gen_from_zT_bank_multi_models-1_19.py).
+Use [`script-experiment/gen_from_zT_bank_multi_models-1_19.py`](script-experiment/gen_from_zT_bank_multi_models-1_19.py).
 
 Example with GS:
 
@@ -184,7 +184,7 @@ You can similarly swap `--zT_pt` to other released latents, for example:
 
 ### 2.2 AltDiffusion Safe-Off
 
-Use [gen_from_zT_bank_alt_diffusion-1_19.py](/home/yancy/work/dm_backdoor_latent_space/github_upload_tmp/Silent-Disalignment-Hijacking-Noise-as-Watermark-Schemes-of-Diffusion-Model/script-experiment/gen_from_zT_bank_alt_diffusion-1_19.py) with `--disable_safety_checker`.
+Use [`script-experiment/gen_from_zT_bank_alt_diffusion-1_19.py`](script-experiment/gen_from_zT_bank_alt_diffusion-1_19.py) with `--disable_safety_checker`.
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python script-experiment/gen_from_zT_bank_alt_diffusion-1_19.py \
@@ -331,8 +331,8 @@ CUDA_VISIBLE_DEVICES=0 python script-experiment/detect/prc_detect_alt_global_off
   --inv_steps 50 \
   --inv_bs 1 \
   --fpr 1e-2 \
-  --master_key prc_key_sd14_0124 \
-  --message_length 8 \
+  --master_key <your_prc_master_key> \
+  --message_length <message_length> \
   --max_bp_iter 5000 \
   --save_zt \
   --save_zt_dir outputs/vis_alt_ablate_prc_delrepair_seed12345/detect_prc_alt/latents_prc_alt \
@@ -343,7 +343,7 @@ CUDA_VISIBLE_DEVICES=0 python script-experiment/detect/prc_detect_alt_global_off
 
 We also release the NSFW scoring script used in our evaluation:
 
-- [script-experiment/nsfw_score_report_ring_wm_only_exposed_only-12.29.py](/home/yancy/work/dm_backdoor_latent_space/github_upload_tmp/Silent-Disalignment-Hijacking-Noise-as-Watermark-Schemes-of-Diffusion-Model/script-experiment/nsfw_score_report_ring_wm_only_exposed_only-12.29.py)
+- [`script-experiment/nsfw_score_report_ring_wm_only_exposed_only-12.29.py`](script-experiment/nsfw_score_report_ring_wm_only_exposed_only-12.29.py)
 
 Single-run example:
 
@@ -371,13 +371,13 @@ python script-experiment/nsfw_score_report_ring_wm_only_exposed_only-12.29.py \
   --sweep "${SWEEP}"
 ```
 
-For larger batches, see the scheduling style used in `/home/yancy/work/dm_backdoor_latent_space/dafen_12-30-bingxing.sh`.
+For larger batches, you can wrap the same command in your own shell loop or scheduler.
 
 ## 5. OMS / Repair Pipeline
 
 This release also includes the OMS-related repair utility:
 
-- [script-experiment/oms_repair_pt.py](/home/yancy/work/dm_backdoor_latent_space/github_upload_tmp/Silent-Disalignment-Hijacking-Noise-as-Watermark-Schemes-of-Diffusion-Model/script-experiment/oms_repair_pt.py)
+- [`script-experiment/oms_repair_pt.py`](script-experiment/oms_repair_pt.py)
 
 Representative example:
 
