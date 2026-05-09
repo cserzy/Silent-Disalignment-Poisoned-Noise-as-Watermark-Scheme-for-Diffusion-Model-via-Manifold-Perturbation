@@ -706,7 +706,7 @@ def cli_main():
     parser.add_argument("--ssp_d_sens_max", type=int, default=64)
     parser.add_argument("--ssp_d_wm", type=int, default=256)
     parser.add_argument("--reuse_ssp", type=int, default=1, help="1: reuse ssp basis from outdir/wm_meta/ssp_basis.pt if present; 0: recompute")
-    parser.add_argument("--lam1", type=float, default=0.6, help="Mixing weight for PRC watermark (lam1). zT = lam1*z_wm + (1-lam1)*Proj_Bsens(z)")
+    parser.add_argument("--lam1", type=float, default=0.87, help="Mixing weight for PRC watermark (lam1). zT = lam1*z_wm + lam2*z_sens, with lam2=sqrt(1-lam1^2).")
     parser.add_argument("--zfree_scale", type=float, default=1.0, help="Scale factor for z_sens in zT = z_wm + scale * z_sens.")
 
     # PRC params

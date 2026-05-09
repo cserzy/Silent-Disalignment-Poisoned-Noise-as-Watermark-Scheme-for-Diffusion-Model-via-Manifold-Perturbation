@@ -3,6 +3,7 @@
 
 import argparse
 import gc
+import hashlib
 import json
 import math
 import os
@@ -27,6 +28,11 @@ def read_prompts(txt: str, max_n: int) -> List[str]:
         lines = [x.strip() for x in f.readlines()]
     lines = [x for x in lines if len(x) > 0]
     return lines[:max_n]
+
+
+def prompts_fingerprint(prompts: List[str]) -> str:
+    payload = "\n".join(prompts).encode("utf-8")
+    return hashlib.sha1(payload).hexdigest()
 
 
 # ---------------- configs ----------------
@@ -59,6 +65,7 @@ def run_ssp_build_Bsens(
     prompts: List[str],
     ssp_cfg: sspConfig,
     cache_pt: str,
+    model_id: str,
     reuse_cache: bool = True,
 ) -> Tuple[torch.Tensor, int]:
     """
@@ -66,9 +73,21 @@ def run_ssp_build_Bsens(
       B_sens: [D, d_sens] orthonormal (float32, on CPU)
       d_sens: int
     """
+    prompt_sha1 = prompts_fingerprint(prompts)
+    latent_shape = [4, 64, 64]
+    expected_cfg = asdict(ssp_cfg)
+
     if reuse_cache and os.path.exists(cache_pt):
         ckpt = torch.load(cache_pt, map_location="cpu")
-        return ckpt["B_sens"].float(), int(ckpt["d_sens"])
+        cache_ok = (
+            ckpt.get("model_id") == model_id
+            and ckpt.get("latent_shape") == latent_shape
+            and ckpt.get("prompt_sha1") == prompt_sha1
+            and int(ckpt.get("prompt_count", -1)) == len(prompts)
+            and ckpt.get("ssp_cfg") == expected_cfg
+        )
+        if cache_ok:
+            return ckpt["B_sens"].float(), int(ckpt["d_sens"])
 
     device = pipe.device
     C, H, W = 4, 64, 64
@@ -111,7 +130,18 @@ def run_ssp_build_Bsens(
     d_sens = int(torch.searchsorted(cum, torch.tensor([ssp_cfg.energy_ratio])).item() + 1)
     B_sens = U[:, :d_sens].contiguous()  # [D, d]
 
-    torch.save({"B_sens": B_sens, "d_sens": d_sens, "ssp_cfg": asdict(ssp_cfg)}, cache_pt)
+    torch.save(
+        {
+            "B_sens": B_sens,
+            "d_sens": d_sens,
+            "ssp_cfg": expected_cfg,
+            "model_id": model_id,
+            "latent_shape": latent_shape,
+            "prompt_count": len(prompts),
+            "prompt_sha1": prompt_sha1,
+        },
+        cache_pt,
+    )
     return B_sens, d_sens
 
 
@@ -166,6 +196,40 @@ def ARR_tail_repair_once(
     z[idx] = val
 
     return z.view_as(zT_pre).float()
+
+
+@torch.no_grad()
+def build_partitioned_support(
+    z_wm: torch.Tensor,
+    tau: float,
+    key_channel_idx: int,
+) -> Tuple[torch.Tensor, torch.Tensor, int, int]:
+    """
+    Build repair support following T2S channel semantics:
+      - one designated key channel
+      - three message channels
+    The returned support is flattened back to the full latent tensor so the
+    downstream repair step can stay simple.
+    """
+    if z_wm.shape[0] != 1 or z_wm.shape[1] != 4:
+        raise ValueError(f"Expect z_wm shape [1,4,H,W], got {tuple(z_wm.shape)}")
+    if not (0 <= int(key_channel_idx) < 4):
+        raise ValueError(f"key_channel_idx must be in [0,3], got {key_channel_idx}")
+
+    msg_channel_idx = [i for i in range(4) if i != int(key_channel_idx)]
+    support_mask = torch.zeros_like(z_wm[0], dtype=torch.bool)
+
+    key_support = z_wm[0, key_channel_idx].abs() >= tau
+    msg_support = z_wm[0, msg_channel_idx].abs() >= tau
+
+    support_mask[key_channel_idx] = key_support
+    support_mask[msg_channel_idx] = msg_support
+
+    idx = torch.nonzero(support_mask.view(-1), as_tuple=False).view(-1).to(torch.long)
+    sgn = torch.sign(z_wm.view(-1).index_select(0, idx)).to(torch.int8)
+    sgn = torch.where(sgn == 0, torch.ones_like(sgn), sgn)
+
+    return idx.cpu(), sgn.cpu(), int(key_support.sum().item()), int(msg_support.sum().item())
 
 
 # ---------------- main ----------------
@@ -252,21 +316,25 @@ def main():
     supports: List[torch.Tensor] = []
     signs: List[torch.Tensor] = []
     support_sizes: List[int] = []
+    key_support_sizes: List[int] = []
+    msg_support_sizes: List[int] = []
 
     for i in range(K):
-        z = z_wm_all[i].view(-1)
-        idx = torch.nonzero(z.abs() >= tau, as_tuple=False).view(-1).to(torch.long)
-        sgn = torch.sign(z.index_select(0, idx)).to(torch.int8)
-        sgn = torch.where(sgn == 0, torch.ones_like(sgn), sgn)
-
-        supports.append(idx.cpu())
-        signs.append(sgn.cpu())
+        idx, sgn, key_sz, msg_sz = build_partitioned_support(
+            z_wm=z_wm_all[i : i + 1],
+            tau=tau,
+            key_channel_idx=key_channel_idx,
+        )
+        supports.append(idx)
+        signs.append(sgn)
+        key_support_sizes.append(key_sz)
+        msg_support_sizes.append(msg_sz)
         support_sizes.append(int(idx.numel()))
 
     # load pipeline (for ssp)
     pipe = StableDiffusionPipeline.from_pretrained(
         args.model_id,
-        torch_dtype=torch_dtype if torch_dtype != torch.float32 else torch.float16,
+        torch_dtype=torch_dtype,
         safety_checker=None,
         requires_safety_checker=False,
     ).to(device)
@@ -293,6 +361,7 @@ def main():
         prompts=cal_prompts,
         ssp_cfg=ssp_cfg,
         cache_pt=ssp_cache,
+        model_id=args.model_id,
         reuse_cache=bool(int(args.reuse_ssp)),
     )  # CPU float32
 
@@ -354,6 +423,8 @@ def main():
         "ssp_cfg": asdict(ssp_cfg),
         "d_sens": int(d_sens),
         "support_sizes": support_sizes,
+        "key_support_sizes": key_support_sizes,
+        "msg_support_sizes": msg_support_sizes,
         "cluster_pt": args.cluster_pt,
         "model_id_for_ssp": args.model_id,
         "prompts_for_ssp": args.prompts,

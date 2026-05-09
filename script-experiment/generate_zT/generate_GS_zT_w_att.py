@@ -1065,7 +1065,7 @@ def main():
     parser.add_argument('--cols', type=int, default=4)
     parser.add_argument('--num_per_prompt', type=int, default=0, help='If 0, use rows*cols.')
     parser.add_argument('--gen_bs', type=int, default=1, help='Micro-batch size per prompt to control GPU memory. Generate in chunks and stitch into a grid. If <=0, use full num_per_prompt.')
-    parser.add_argument('--lambda1', type=float, default=0.8, help='SSM mixing weight for the GS watermarked latent: zT = lambda1*z_wm + lambda2*z_sens, with lambda1^2+lambda2^2=1. lambda2 is derived from lambda1.')
+    parser.add_argument('--lambda1', type=float, default=0.9, help='SSM mixing weight for the GS watermarked latent: zT = lambda1*z_wm + lambda2*z_sens, with lambda1^2+lambda2^2=1. lambda2 is derived from lambda1.')
 
     # Save zT for decoding (bypass inversion)
     parser.add_argument('--save_zt', action='store_true', help='Save initial/refined zT latents (.pt) under outdir/latents for direct GS decoding (no inversion).')
