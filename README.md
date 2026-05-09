@@ -1,36 +1,43 @@
-# Silent-Disalignment-Hijacking-Noise-as-Watermark-Schemes-of-Diffusion-Model
+# PNaW Release: Scripts and Latent Assets
 
-This repository contains the released scripts and latent assets for **PNaW (Poisoned Noise-as-Watermark)** from the paper:
+This repository releases a compact public subset of the code and assets used in our **PNaW (Poisoned Noise-as-Watermark)** experiments from the paper:
 
 > **Silent Disalignment: Poisoned Noise-as-Watermark Scheme for Diffusion Model via Manifold Perturbation**
 
-The main purpose of this repository is to release:
+It is organized around the same three-step workflow used in the paper: generate a latent bank `z_T`, synthesize images from the saved `.pt` latents, and run the corresponding watermark detector or inversion-based evaluation.
 
-- scripts for generating attacked watermark latents (`z_T` banks stored as `.pt`)
-- scripts for generating images from released `.pt` latents
-- scripts for watermark detection and inversion-based evaluation
-- representative latent assets and prompt files used in our experiments
+This release includes:
 
-## Overview
+- attacked or watermarked latent banks stored as `.pt`
+- scripts for generating images from released latent banks
+- watermark detection and inversion utilities
+- representative prompt files and latent assets used in our experiments
 
-PNaW follows the same high-level workflow described in the paper:
+## Quick Start
 
-1. Generate a watermarked or attacked initial latent bank `z_T`
-2. Feed the saved `.pt` latent bank into a diffusion pipeline to generate images
-3. Run the corresponding detector to recover or verify the watermark from generated images
+1. Create the recommended environment:
 
-This repository currently exposes a compact public subset of our experiment assets:
+```bash
+conda env create -f environment.hijacking.yml
+conda activate Hijacking
+```
+
+2. Check the main released assets:
 
 - [`latents_experiment/`](latents_experiment/)
 - [`prompt/`](prompt/)
 - [`script-experiment/`](script-experiment/)
 
+3. Pick a workflow below:
+
+- generate attacked latent banks in [1. Generate Attacked Latent Banks](#1-generate-attacked-latent-banks)
+- generate images from `.pt` latents in [2. Generate Images from Released `.pt` Latents](#2-generate-images-from-released-pt-latents)
+- run watermark detection in [3. Detection](#3-detection)
+
 ## Repository Layout
 
 - `latents_experiment/`: released `.pt` latent banks and a small number of associated metadata files
-- `prompt/`: released prompt sets
-  - `AdultSuggestive.txt`
-  - `AnimeMinor.txt`
+- `prompt/`: released prompt sets, including `AdultSuggestive.txt` and `AnimeMinor.txt`
 - `script-experiment/generate_zT/`: scripts for generating attacked watermark latents
 - `script-experiment/`: scripts for generating images from latent banks
 - `script-experiment/detect/`: watermark detectors and related inversion utilities
