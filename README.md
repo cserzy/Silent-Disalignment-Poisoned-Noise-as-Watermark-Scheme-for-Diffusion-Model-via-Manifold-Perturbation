@@ -53,6 +53,24 @@ Some pipelines also require scheme-specific side products that are not fully bun
 - PRC detection needs watermark metadata generated during watermark construction
 - T2S detection needs the corresponding cluster metadata `.pt`
 
+For environment setup, this repository now includes two exported dependency files at the repository root:
+
+- `environment.hijacking.yml`: the closest snapshot of our conda environment
+- `requirements.txt`: a pip-style dependency list exported from the same environment
+
+We recommend using the conda environment file first:
+
+```bash
+conda env create -f environment.hijacking.yml
+conda activate Hijacking
+```
+
+If you prefer a pip-based setup, you can instead install:
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Released Prompt Files
 
 We renamed the public prompt files to simpler names:
